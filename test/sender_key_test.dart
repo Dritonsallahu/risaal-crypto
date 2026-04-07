@@ -62,7 +62,8 @@ void main() {
       expect(distribution.senderId, storedUserId);
     });
 
-    test('Distribution chainKey and signingKey are valid base64', () async {
+    test('Distribution chainKey is 32 bytes, signingKey is Ed25519 public key',
+        () async {
       final (manager, _) = await _createManager('alice');
       const groupId = 'group-001';
 
@@ -73,6 +74,7 @@ void main() {
       final signingKeyBytes = base64Decode(distribution.signingKey);
 
       expect(chainKeyBytes.length, 32);
+      // Ed25519 public key is 32 bytes
       expect(signingKeyBytes.length, 32);
     });
   });
@@ -429,7 +431,8 @@ void main() {
   });
 
   group('SenderKeyManager adversarial', () {
-    test('Tampered ciphertext -> decrypt throws (HMAC verification fails)',
+    test(
+        'Tampered ciphertext -> decrypt throws (Ed25519 signature verification fails)',
         () async {
       final (managerAlice, _) = await _createManager('alice');
       final (managerBob, _) = await _createManager('bob');
@@ -463,7 +466,7 @@ void main() {
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            contains('HMAC verification failed'),
+            contains('Ed25519 signature verification failed'),
           ),
         ),
       );
@@ -502,7 +505,7 @@ void main() {
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            contains('HMAC verification failed'),
+            contains('Ed25519 signature verification failed'),
           ),
         ),
       );
@@ -535,14 +538,14 @@ void main() {
         signature: encrypted.signature,
       );
 
-      // Tampering with IV changes the signature input, so HMAC fails
+      // Tampering with IV changes the signature input, so Ed25519 verification fails
       await expectLater(
         () => managerBob.decrypt(groupId, 'alice', tamperedMessage),
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            contains('HMAC verification failed'),
+            contains('Ed25519 signature verification failed'),
           ),
         ),
       );
@@ -686,13 +689,14 @@ void main() {
       expect(restored.signingKey, distribution.signingKey);
     });
 
-    test('SenderKeyState toJson/fromJson round-trip', () {
+    test('SenderKeyState toJson/fromJson round-trip (with private key)', () {
       final state = SenderKeyState(
         groupId: 'group-456',
         senderId: 'bob',
         iteration: 5,
         chainKey: List.generate(32, (i) => i),
-        signingKey: List.generate(32, (i) => i + 100),
+        signingPublicKey: base64Encode(List.generate(32, (i) => i + 100)),
+        signingPrivateKey: base64Encode(List.generate(64, (i) => i + 50)),
       );
 
       final json = state.toJson();
@@ -702,7 +706,50 @@ void main() {
       expect(restored.senderId, state.senderId);
       expect(restored.iteration, state.iteration);
       expect(restored.chainKey, state.chainKey);
-      expect(restored.signingKey, state.signingKey);
+      expect(restored.signingPublicKey, state.signingPublicKey);
+      expect(restored.signingPrivateKey, state.signingPrivateKey);
+    });
+
+    test('SenderKeyState toJson/fromJson round-trip (public key only)', () {
+      final state = SenderKeyState(
+        groupId: 'group-456',
+        senderId: 'bob',
+        iteration: 5,
+        chainKey: List.generate(32, (i) => i),
+        signingPublicKey: base64Encode(List.generate(32, (i) => i + 100)),
+        signingPrivateKey: null,
+      );
+
+      final json = state.toJson();
+      final restored = SenderKeyState.fromJson(json);
+
+      expect(restored.groupId, state.groupId);
+      expect(restored.senderId, state.senderId);
+      expect(restored.iteration, state.iteration);
+      expect(restored.chainKey, state.chainKey);
+      expect(restored.signingPublicKey, state.signingPublicKey);
+      expect(restored.signingPrivateKey, isNull);
+    });
+
+    test('SenderKeyState fromJson handles legacy HMAC format', () {
+      // Legacy format used 'signingKey' as a shared HMAC key
+      final legacyJson = {
+        'groupId': 'group-legacy',
+        'senderId': 'alice',
+        'iteration': 3,
+        'chainKey': base64Encode(List.generate(32, (i) => i)),
+        'signingKey': base64Encode(List.generate(32, (i) => i + 200)),
+      };
+
+      final restored = SenderKeyState.fromJson(legacyJson);
+
+      expect(restored.groupId, 'group-legacy');
+      expect(restored.senderId, 'alice');
+      expect(restored.iteration, 3);
+      // Legacy signing key should be treated as public key
+      expect(restored.signingPublicKey, legacyJson['signingKey']);
+      // No private key in legacy format
+      expect(restored.signingPrivateKey, isNull);
     });
   });
 }

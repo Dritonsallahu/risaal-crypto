@@ -7,6 +7,7 @@ import 'package:cryptography/cryptography.dart' hide KeyPair;
 
 import 'crypto_debug_logger.dart';
 import 'crypto_storage.dart';
+import 'key_helper.dart';
 import 'message_padding.dart';
 
 /// Mutable state of a Sender Key for a specific group and sender.
@@ -14,11 +15,17 @@ import 'message_padding.dart';
 /// Each group member generates their own Sender Key (one per group) and
 /// distributes it to all other members via 1-to-1 encrypted sessions. When
 /// Alice sends a group message, she encrypts it once with her Sender Key
-/// (AES-256-CBC + HMAC-SHA256) and broadcasts the same ciphertext to all
+/// (AES-256-CBC + Ed25519 signature) and broadcasts the same ciphertext to all
 /// members. Everyone who has Alice's Sender Key can decrypt.
 ///
 /// The chain key ratchets forward after each message (forward secrecy within
-/// the group). The signing key is static for the lifetime of the Sender Key.
+/// the group). The Ed25519 signing key is static for the lifetime of the
+/// Sender Key.
+///
+/// Authentication uses **asymmetric Ed25519 signatures** rather than shared
+/// HMAC. Only the sender holds the private signing key and can produce
+/// signatures. Recipients hold only the public key and can verify, but
+/// cannot forge messages on behalf of the sender.
 ///
 /// State lifecycle:
 ///   - Created by [SenderKeyManager.generateSenderKey]
@@ -34,14 +41,16 @@ class SenderKeyState {
   final String senderId;
   int iteration;
   List<int> chainKey; // 32 bytes
-  final List<int> signingKey; // 32 bytes — HMAC signing key
+  final String signingPublicKey;   // Ed25519 public key (base64)
+  final String? signingPrivateKey; // Ed25519 private key (base64) — only for OUR OWN sender key
 
   SenderKeyState({
     required this.groupId,
     required this.senderId,
     required this.iteration,
     required this.chainKey,
-    required this.signingKey,
+    required this.signingPublicKey,
+    this.signingPrivateKey,
   });
 
   Map<String, dynamic> toJson() => {
@@ -49,16 +58,35 @@ class SenderKeyState {
     'senderId': senderId,
     'iteration': iteration,
     'chainKey': base64Encode(chainKey),
-    'signingKey': base64Encode(signingKey),
+    'signingPublicKey': signingPublicKey,
+    if (signingPrivateKey != null) 'signingPrivateKey': signingPrivateKey,
   };
 
-  factory SenderKeyState.fromJson(Map<String, dynamic> json) => SenderKeyState(
-    groupId: json['groupId'] as String,
-    senderId: json['senderId'] as String,
-    iteration: json['iteration'] as int,
-    chainKey: base64Decode(json['chainKey'] as String),
-    signingKey: base64Decode(json['signingKey'] as String),
-  );
+  factory SenderKeyState.fromJson(Map<String, dynamic> json) {
+    // Migration: detect legacy format (shared HMAC key) vs new Ed25519 format
+    if (json.containsKey('signingPublicKey')) {
+      // New Ed25519 format
+      return SenderKeyState(
+        groupId: json['groupId'] as String,
+        senderId: json['senderId'] as String,
+        iteration: json['iteration'] as int,
+        chainKey: base64Decode(json['chainKey'] as String),
+        signingPublicKey: json['signingPublicKey'] as String,
+        signingPrivateKey: json['signingPrivateKey'] as String?,
+      );
+    } else {
+      // Legacy format: 'signingKey' was a shared HMAC key.
+      // Treat as public-only (cannot sign — forces sender key regeneration).
+      return SenderKeyState(
+        groupId: json['groupId'] as String,
+        senderId: json['senderId'] as String,
+        iteration: json['iteration'] as int,
+        chainKey: base64Decode(json['chainKey'] as String),
+        signingPublicKey: json['signingKey'] as String,
+        signingPrivateKey: null,
+      );
+    }
+  }
 }
 
 /// Distribution message sent to each group member via 1-to-1 encrypted sessions.
@@ -74,12 +102,16 @@ class SenderKeyState {
 ///   "senderId": "alice-uuid",
 ///   "iteration": 0,
 ///   "chainKey": "<base64 32-byte AES chain key>",
-///   "signingKey": "<base64 32-byte HMAC signing key>"
+///   "signingKey": "<base64 Ed25519 public key>"
 /// }
 /// ```
 ///
-/// After receiving this, the recipient can decrypt all future messages from
-/// this sender in this group.
+/// The `signingKey` field contains the sender's Ed25519 **public** key only.
+/// Recipients use it to verify message signatures but cannot forge messages.
+/// The sender's private signing key never leaves the sender's device.
+///
+/// After receiving this, the recipient can decrypt and verify all future
+/// messages from this sender in this group.
 ///
 /// See also:
 ///   - [SenderKeyManager.generateSenderKey] which creates this distribution
@@ -89,7 +121,7 @@ class SenderKeyDistribution {
   final String senderId;
   final int iteration;
   final String chainKey; // base64
-  final String signingKey; // base64
+  final String signingKey; // base64 — Ed25519 PUBLIC KEY ONLY
 
   const SenderKeyDistribution({
     required this.groupId,
@@ -128,15 +160,16 @@ class SenderKeyDistribution {
 ///   "iteration": 5,
 ///   "ciphertext": "<base64 AES-256-CBC ciphertext>",
 ///   "iv": "<base64 16-byte IV>",
-///   "signature": "<base64 HMAC-SHA256 signature>"
+///   "signature": "<base64 Ed25519 signature>"
 /// }
 /// ```
 ///
 /// The [iteration] allows recipients to fast-forward their chain key if they
 /// missed messages (e.g., iteration jumps from 3 to 7 — derive chain key 4 times).
 ///
-/// The [signature] authenticates the ciphertext + IV + iteration, preventing
-/// tampering or replays.
+/// The [signature] is an Ed25519 signature over (IV || ciphertext || iteration),
+/// produced by the sender's private signing key. Only the sender can produce
+/// valid signatures; recipients verify using the sender's public key.
 ///
 /// See also:
 ///   - [SenderKeyManager.encrypt] which produces this message
@@ -145,7 +178,7 @@ class SenderKeyMessage {
   final int iteration;
   final String ciphertext; // base64 AES-256-CBC ciphertext
   final String iv; // base64 16-byte IV
-  final String signature; // base64 HMAC-SHA256
+  final String signature; // base64 Ed25519 signature
 
   const SenderKeyMessage({
     required this.iteration,
@@ -177,16 +210,17 @@ class SenderKeyMessage {
 /// the sender encrypts once and broadcasts the same ciphertext to all members.
 ///
 /// Protocol overview:
-///   1. Each group member generates a Sender Key (chain key + signing key)
-///   2. The Sender Key is distributed to all members via 1-to-1 encrypted sessions
+///   1. Each group member generates a Sender Key (chain key + Ed25519 signing key pair)
+///   2. The Sender Key distribution (chain key + Ed25519 **public** key) is sent
+///      to all members via 1-to-1 encrypted sessions
 ///   3. When sending to the group, encrypt with AES-256-CBC using a key derived from the chain key
-///   4. Authenticate the ciphertext with HMAC-SHA256 using the signing key
+///   4. Authenticate the ciphertext with Ed25519 signature using the sender's **private** key
 ///   5. Broadcast the same ciphertext to all members
 ///   6. The chain key ratchets forward after each message (forward secrecy)
 ///
 /// Each member has:
-///   - **One sender key they generated** (for encrypting their own messages)
-///   - **N sender keys from other members** (for decrypting their messages)
+///   - **One sender key they generated** (with Ed25519 private key — for signing)
+///   - **N sender keys from other members** (with Ed25519 public key only — for verifying)
 ///
 /// Chain key derivation:
 ///   - `nextChainKey = HMAC(chainKey, 0x01)`
@@ -199,7 +233,8 @@ class SenderKeyMessage {
 ///
 /// Security properties:
 ///   - Forward secrecy: Chain key is deleted after deriving the next one
-///   - Authentication: HMAC prevents tampering
+///   - Sender authentication: Ed25519 signatures prevent forgery by recipients
+///   - Anti-forgery: Recipients hold only the public key and CANNOT sign on behalf of the sender
 ///   - No post-compromise security: If signing key is leaked, all future messages are compromised
 ///     (unlike Double Ratchet which has DH ratchet steps)
 ///
@@ -253,28 +288,30 @@ class SenderKeyManager {
 
     // Generate 32-byte random chain key
     final chainKey = _generateRandomBytes(32);
-    // Generate 32-byte random signing key
-    final signingKey = _generateRandomBytes(32);
+    // Generate Ed25519 key pair for asymmetric signing
+    final signingKeyPair = await SignalKeyHelper.generateSigningKeyPair();
 
     final state = SenderKeyState(
       groupId: groupId,
       senderId: senderId,
       iteration: 0,
       chainKey: chainKey,
-      signingKey: signingKey,
+      signingPublicKey: signingKeyPair.publicKey,
+      signingPrivateKey: signingKeyPair.privateKey, // Keep private!
     );
 
-    // Persist our own sender key
+    // Persist our own sender key (includes private signing key)
     await _saveSenderKey(groupId, senderId, state);
 
     CryptoDebugLogger.log('SENDER_KEY', '═══ Sender Key generated ═══');
 
+    // Distribute ONLY the public signing key
     return SenderKeyDistribution(
       groupId: groupId,
       senderId: senderId,
       iteration: 0,
       chainKey: base64Encode(chainKey),
-      signingKey: base64Encode(signingKey),
+      signingKey: signingKeyPair.publicKey, // Public only!
     );
   }
 
@@ -301,7 +338,8 @@ class SenderKeyManager {
       senderId: senderId,
       iteration: distribution.iteration,
       chainKey: base64Decode(distribution.chainKey),
-      signingKey: base64Decode(distribution.signingKey),
+      signingPublicKey: distribution.signingKey, // Public key only
+      signingPrivateKey: null, // We don't have sender's private key
     );
 
     await _saveSenderKey(groupId, senderId, state);
@@ -337,13 +375,24 @@ class SenderKeyManager {
     // Encrypt with AES-256-CBC
     final ciphertext = await _aes256CbcEncrypt(plaintext, messageKey, iv);
 
-    // HMAC-SHA256 signature over the ciphertext for authentication
+    // Ed25519 signature over the ciphertext for authentication
     final signatureInput = <int>[
       ...iv,
       ...ciphertext,
       ..._intToBytes(state.iteration),
     ];
-    final signature = await _hmacSign(state.signingKey, signatureInput);
+
+    if (state.signingPrivateKey == null) {
+      throw StateError(
+        'Cannot encrypt — no signing private key. '
+        'This is a received sender key, not our own. '
+        'Call generateSenderKey() to create your own sender key.',
+      );
+    }
+    final signature = await SignalKeyHelper.sign(
+      state.signingPrivateKey!,
+      signatureInput,
+    );
 
     final currentIteration = state.iteration;
 
@@ -369,7 +418,7 @@ class SenderKeyManager {
       iteration: currentIteration,
       ciphertext: base64Encode(ciphertext),
       iv: base64Encode(iv),
-      signature: base64Encode(signature),
+      signature: signature, // Already base64 from SignalKeyHelper.sign
     );
   }
 
@@ -457,7 +506,7 @@ class SenderKeyManager {
     // Derive the message key at the target iteration
     final messageKey = await _deriveMessageKey(chainKey);
 
-    // Verify HMAC signature
+    // Verify Ed25519 signature
     final iv = base64Decode(message.iv);
     final ciphertext = base64Decode(message.ciphertext);
 
@@ -466,12 +515,16 @@ class SenderKeyManager {
       ...ciphertext,
       ..._intToBytes(message.iteration),
     ];
-    final expectedSignature = await _hmacSign(state.signingKey, signatureInput);
-    final actualSignature = base64Decode(message.signature);
 
-    if (!_constantTimeEquals(expectedSignature, actualSignature)) {
+    final signatureValid = await SignalKeyHelper.verify(
+      state.signingPublicKey,
+      signatureInput,
+      message.signature,
+    );
+    if (!signatureValid) {
       throw StateError(
-        'Sender Key HMAC verification failed. Message tampered.',
+        'Sender Key Ed25519 signature verification failed. '
+        'Message tampered or forged.',
       );
     }
 
@@ -531,20 +584,6 @@ class SenderKeyManager {
     final mac = await _hmac.calculateMac([
       0x02,
     ], secretKey: SecretKey(chainKey));
-    return mac.bytes;
-  }
-
-  // ── Private: HMAC Signing ─────────────────────────────────────────
-
-  /// Compute HMAC-SHA256(signingKey, data).
-  static Future<List<int>> _hmacSign(
-    List<int> signingKey,
-    List<int> data,
-  ) async {
-    final mac = await _hmac.calculateMac(
-      data,
-      secretKey: SecretKey(signingKey),
-    );
     return mac.bytes;
   }
 
@@ -628,13 +667,4 @@ class SenderKeyManager {
     ];
   }
 
-  /// Constant-time comparison to prevent timing attacks.
-  static bool _constantTimeEquals(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    var result = 0;
-    for (var i = 0; i < a.length; i++) {
-      result |= a[i] ^ b[i];
-    }
-    return result == 0;
-  }
 }

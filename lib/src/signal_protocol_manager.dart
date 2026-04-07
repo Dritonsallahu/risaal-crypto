@@ -241,10 +241,16 @@ class SignalProtocolManager {
 
     final kyberKP = await _cryptoStorage.getKyberKeyPair();
 
+    if (signingKP == null) {
+      throw StateError(
+        'Signing key pair not found. Call initialize() first. '
+        'The Ed25519 signing key is required for all key bundles.',
+      );
+    }
+
     return {
       'identityKey': identityKP.publicKey, // X25519 DH public key
-      if (signingKP != null)
-        'identitySigningKey': signingKP.publicKey, // Ed25519 signing public key
+      'identitySigningKey': signingKP.publicKey, // Ed25519 signing public key
       'signedPreKey': {
         'keyId': signedPreKey.keyId,
         'publicKey': signedPreKey.keyPair.publicKey,
@@ -291,7 +297,10 @@ class SignalProtocolManager {
   /// await manager.createSession(PreKeyBundle.fromJson(bundle));
   /// final encrypted = await manager.encryptMessage('bob-id', 'device-1', 'Hi Bob!');
   /// ```
-  Future<void> createSession(PreKeyBundle recipientBundle) async {
+  Future<void> createSession(
+    PreKeyBundle recipientBundle, {
+    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.preferPq,
+  }) async {
     CryptoDebugLogger.log('X3DH', '═══ Creating session (initiator/Alice) ═══');
     CryptoDebugLogger.log(
       'X3DH',
@@ -325,11 +334,13 @@ class SignalProtocolManager {
     final x3dhResult = await X3DH.initiateKeyAgreement(
       identityKeyPair: identityKP,
       recipientBundle: recipientBundle,
+      pqxdhPolicy: pqxdhPolicy,
     );
 
     CryptoDebugLogger.log(
       'X3DH',
-      'Shared secret derived: ${x3dhResult.sharedSecret.length} bytes',
+      'Shared secret derived: ${x3dhResult.sharedSecret.length} bytes '
+      '(pqxdhUsed=${x3dhResult.pqxdhUsed})',
     );
     CryptoDebugLogger.logKeyInfo(
       'X3DH',
@@ -1298,7 +1309,7 @@ class SignalProtocolManager {
 
   /// Generate a Sender Key for group encryption (encrypt-once, decrypt-many).
   ///
-  /// Creates a new AES-256-CBC + HMAC-SHA256 sender key for the specified group.
+  /// Creates a new AES-256-CBC + Ed25519 sender key for the specified group.
   /// The sender key allows you to encrypt a message once and send it to all group
   /// members (instead of encrypting N times with N 1-to-1 sessions).
   ///
@@ -1306,7 +1317,7 @@ class SignalProtocolManager {
   ///   - `groupId`: The group identifier
   ///   - `senderId`: Your user ID
   ///   - `chainKey`: 32-byte AES chain key (base64)
-  ///   - `signingKey`: 32-byte HMAC signing key (base64)
+  ///   - `signingKey`: Ed25519 public signing key (base64) — private key stays local
   ///   - `iteration`: 0 (initial state)
   ///
   /// You must encrypt this distribution with each member's 1-to-1 session and
