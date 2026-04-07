@@ -185,6 +185,11 @@ class DoubleRatchet {
       receivingChainKey: '', // no receiving chain until we get a reply
     );
 
+    // Zero DH intermediaries — must not persist in RAM
+    SecureMemory.zeroBytes(dhOutput);
+    SecureMemory.zeroBytes(newRootKey);
+    SecureMemory.zeroBytes(newChainKey);
+
     return DoubleRatchet._(state);
   }
 
@@ -397,6 +402,11 @@ class DoubleRatchet {
     _state.rootKey = base64Encode(newRootKey1);
     _state.receivingChainKey = base64Encode(recvChainKey);
 
+    // Zero DH output and old root key — must not persist in RAM
+    SecureMemory.zeroBytes(dhOutput);
+    SecureMemory.zeroBytes(rootKey);
+    SecureMemory.zeroBytes(recvChainKey);
+
     // Sending chain: generate new DH key pair
     final newSendingKP = await SignalKeyHelper.generateX25519KeyPair();
     _state.dhSendingKeyPair = jsonEncode(newSendingKP.toJson());
@@ -406,6 +416,12 @@ class DoubleRatchet {
         await _kdfRK(newRootKey1, dhOutput2);
     _state.rootKey = base64Encode(newRootKey2);
     _state.sendingChainKey = base64Encode(sendChainKey);
+
+    // Zero second DH output and intermediate key material
+    SecureMemory.zeroBytes(dhOutput2);
+    SecureMemory.zeroBytes(newRootKey1);
+    SecureMemory.zeroBytes(newRootKey2);
+    SecureMemory.zeroBytes(sendChainKey);
   }
 
   // ── Private: Skip Message Keys ────────────────────────────────────
@@ -431,9 +447,13 @@ class DoubleRatchet {
     for (var i = _state.receiveMessageNumber; i < untilNumber; i++) {
       final (newChainKey, messageKey) = await _kdfCK(chainKey);
       _state.skippedKeys['$dhPublicKey:$i'] = base64Encode(messageKey);
+      // Zero old chain key and message key copy after storing
+      SecureMemory.zeroBytes(chainKey);
+      SecureMemory.zeroBytes(messageKey);
       chainKey = newChainKey;
     }
     _state.receivingChainKey = base64Encode(chainKey);
+    SecureMemory.zeroBytes(chainKey);
   }
 
   // ── Private: AES-256-GCM Decryption ──────────────────────────────

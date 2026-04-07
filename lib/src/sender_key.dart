@@ -9,6 +9,7 @@ import 'crypto_debug_logger.dart';
 import 'crypto_storage.dart';
 import 'key_helper.dart';
 import 'message_padding.dart';
+import 'secure_memory.dart';
 
 /// Mutable state of a Sender Key for a specific group and sender.
 ///
@@ -396,14 +397,15 @@ class SenderKeyManager {
 
     final currentIteration = state.iteration;
 
+    // Zero the message key after encryption — must not persist in RAM
+    SecureMemory.zeroBytes(messageKey);
+
     // Ratchet the chain key forward — zero old key for forward secrecy
     final oldChainKey = state.chainKey;
     state.chainKey = await _deriveNextChainKey(oldChainKey);
     state.iteration++;
     // Zero old chain key so a memory dump can't recover previous keys
-    for (var i = 0; i < oldChainKey.length; i++) {
-      oldChainKey[i] = 0;
-    }
+    SecureMemory.zeroBytes(oldChainKey);
 
     // Persist updated state
     await _saveSenderKey(groupId, senderId, state);
@@ -498,9 +500,7 @@ class SenderKeyManager {
       final oldKey = chainKey;
       chainKey = await _deriveNextChainKey(oldKey);
       // Zero intermediate chain keys for forward secrecy
-      for (var j = 0; j < oldKey.length; j++) {
-        oldKey[j] = 0;
-      }
+      SecureMemory.zeroBytes(oldKey);
     }
 
     // Derive the message key at the target iteration
@@ -531,18 +531,17 @@ class SenderKeyManager {
     // Decrypt with AES-256-CBC
     final plaintext = await _aes256CbcDecrypt(ciphertext, messageKey, iv);
 
+    // Zero the message key after decryption — must not persist in RAM
+    SecureMemory.zeroBytes(messageKey);
+
     // Advance the stored state past this message — zero old keys
     final oldStateChainKey = state.chainKey;
     state.chainKey = await _deriveNextChainKey(chainKey);
     state.iteration = message.iteration + 1;
     await _saveSenderKey(groupId, senderId, state);
     // Zero old chain keys for forward secrecy
-    for (var i = 0; i < oldStateChainKey.length; i++) {
-      oldStateChainKey[i] = 0;
-    }
-    for (var i = 0; i < chainKey.length; i++) {
-      chainKey[i] = 0;
-    }
+    SecureMemory.zeroBytes(oldStateChainKey);
+    SecureMemory.zeroBytes(chainKey);
 
     CryptoDebugLogger.log(
       'SENDER_KEY',
