@@ -22,6 +22,15 @@ If you discover a security vulnerability in `risaal_crypto`, please report it re
 
 We take all security reports seriously and will acknowledge receipt within 72 hours.
 
+### Escalation for Active Attacks (P0)
+
+If a vulnerability is being **actively exploited**:
+
+1. **Email** security@risaal.org — include "P0 ACTIVE EXPLOIT" in subject
+2. **If no response within 2 hours:** escalate to hello@risaal.org
+3. **If vulnerability affects >1% of users:** trigger emergency patch release (bypass standard review, require single maintainer sign-off)
+4. **If key material is compromised server-side:** push remote key rotation to all clients immediately
+
 ## Supported Versions
 
 | Version | Supported          | Status |

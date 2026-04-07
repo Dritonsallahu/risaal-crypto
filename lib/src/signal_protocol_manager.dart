@@ -1696,6 +1696,25 @@ class SignalProtocolManager {
     return null;
   }
 
+  /// Force immediate rotation of all rotatable keys.
+  ///
+  /// Use during incident response when key compromise is suspected.
+  /// Bypasses age checks and rotates both signed pre-key and Kyber key
+  /// unconditionally.
+  ///
+  /// Returns the updated key bundle — caller MUST upload to server
+  /// immediately after this call.
+  Future<Map<String, dynamic>> forceKeyRotationNow() async {
+    final bundle = await rotateKeysIfNeeded(
+      signedPreKeyMaxAge: Duration.zero,
+      kyberKeyMaxAge: Duration.zero,
+    );
+    // rotateKeysIfNeeded returns null only when both keys are fresh.
+    // With Duration.zero every key is "stale", so bundle will always be
+    // non-null. Defensive fallback just in case.
+    return bundle ?? await generateKeyBundle();
+  }
+
   /// Return the number of one-time pre-keys currently stored locally.
   Future<int> oneTimePreKeyCount() async {
     final keys = await _cryptoStorage.getOneTimePreKeys();
