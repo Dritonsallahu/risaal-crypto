@@ -417,11 +417,26 @@ class SignalProtocolManager {
       );
     }
 
-    final x3dhResult = await X3DH.initiateKeyAgreement(
-      identityKeyPair: identityKP,
-      recipientBundle: recipientBundle,
-      pqxdhPolicy: pqxdhPolicy,
-    );
+    final X3DHResult x3dhResult;
+    try {
+      x3dhResult = await X3DH.initiateKeyAgreement(
+        identityKeyPair: identityKP,
+        recipientBundle: recipientBundle,
+        pqxdhPolicy: pqxdhPolicy,
+      );
+    } catch (e) {
+      if (e.toString().contains('signature verification failed')) {
+        _eventBus?.emitType(
+          SecurityEventType.signatureVerificationFailed,
+          sessionId: _sessionKey(
+            recipientBundle.userId,
+            recipientBundle.deviceId,
+          ),
+          metadata: {'source': 'x3dh', 'reason': 'signed_pre_key'},
+        );
+      }
+      rethrow;
+    }
 
     // Record peer's current PQXDH capability for future downgrade checks
     await _cryptoStorage.savePeerPqxdhCapability(
@@ -849,6 +864,29 @@ class SignalProtocolManager {
     try {
       return await _decryptMessageInner(senderId, senderDeviceId, envelope);
     } catch (e) {
+      final msg = e.toString();
+
+      // Replay rejection — emit event and rethrow without triggering reset
+      if (msg.contains('Replay attack detected') ||
+          msg.contains('already received')) {
+        _eventBus?.emitType(
+          SecurityEventType.replayRejected,
+          sessionId: _sessionKey(senderId, senderDeviceId),
+          metadata: {'source': 'double_ratchet'},
+        );
+        rethrow;
+      }
+
+      // Skipped-key cap exceeded — emit event and rethrow
+      if (msg.contains('Too many skipped message keys')) {
+        _eventBus?.emitType(
+          SecurityEventType.skippedKeyCapReached,
+          sessionId: _sessionKey(senderId, senderDeviceId),
+          metadata: {'source': 'double_ratchet'},
+        );
+        rethrow;
+      }
+
       if (!_shouldTriggerReset(e)) rethrow;
 
       CryptoDebugLogger.log(
@@ -1278,10 +1316,23 @@ class SignalProtocolManager {
     );
 
     // Unseal the outer envelope to discover the sender
-    final content = await SealedSenderEnvelope.unseal(
-      sealedEnvelope: sealedEnvelope,
-      recipientIdentityKeyPair: identityKP,
-    );
+    final SealedSenderContent content;
+    try {
+      content = await SealedSenderEnvelope.unseal(
+        sealedEnvelope: sealedEnvelope,
+        recipientIdentityKeyPair: identityKP,
+      );
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('nonce already seen') ||
+          msg.contains('replay window')) {
+        _eventBus?.emitType(
+          SecurityEventType.replayRejected,
+          metadata: {'source': 'sealed_sender', 'reason': msg},
+        );
+      }
+      rethrow;
+    }
 
     CryptoDebugLogger.log(
       'UNSEAL',
@@ -1946,12 +1997,30 @@ class SignalProtocolManager {
     );
     final messageJson = jsonDecode(ciphertext) as Map<String, dynamic>;
     final senderKeyMessage = SenderKeyMessage.fromJson(messageJson);
-    final paddedPlaintext = await _senderKeyManager.decrypt(
-      groupId,
-      senderId,
-      senderKeyMessage,
-    );
-    return MessagePadding.unpadString(paddedPlaintext);
+    try {
+      final paddedPlaintext = await _senderKeyManager.decrypt(
+        groupId,
+        senderId,
+        senderKeyMessage,
+      );
+      return MessagePadding.unpadString(paddedPlaintext);
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('signature verification failed')) {
+        _eventBus?.emitType(
+          SecurityEventType.signatureVerificationFailed,
+          sessionId: groupId,
+          metadata: {'source': 'sender_key', 'senderId': senderId},
+        );
+      } else if (msg.contains('Possible replay attack')) {
+        _eventBus?.emitType(
+          SecurityEventType.replayRejected,
+          sessionId: groupId,
+          metadata: {'source': 'sender_key', 'senderId': senderId},
+        );
+      }
+      rethrow;
+    }
   }
 
   /// Whether we have our own Sender Key for a group (ready to encrypt).

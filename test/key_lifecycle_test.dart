@@ -502,7 +502,7 @@ void main() {
 
       expect(fresh, isFalse);
       expect(expiredEvent, isNotNull);
-      expect(expiredEvent!.metadata?['keyType'], equals('signedPreKey'));
+      expect(expiredEvent!.metadata['keyType'], equals('signedPreKey'));
     });
 
     test('returns false when Kyber key exceeds absolute max lifetime',
@@ -526,7 +526,7 @@ void main() {
       SecurityEvent? expiredEvent;
       eventBus.events.listen((event) {
         if (event.type == SecurityEventType.keyExpired &&
-            event.metadata?['keyType'] == 'kyber') {
+            event.metadata['keyType'] == 'kyber') {
           expiredEvent = event;
         }
       });
@@ -560,7 +560,7 @@ void main() {
       final expiredKeys = <String>[];
       eventBus.events.listen((event) {
         if (event.type == SecurityEventType.keyExpired) {
-          expiredKeys.add(event.metadata?['keyType'] as String);
+          expiredKeys.add(event.metadata['keyType'] as String);
         }
       });
 

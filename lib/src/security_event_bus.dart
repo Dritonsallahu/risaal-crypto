@@ -41,6 +41,12 @@ enum SecurityEventType {
 
   /// Pre-key replenishment is needed (OTP consumed during session setup).
   preKeyReplenishmentNeeded,
+
+  /// An anomaly pattern was detected (e.g. signature failure spike).
+  ///
+  /// Emitted by [SecurityAnomalyDetector] when event frequency exceeds
+  /// configured thresholds. Metadata includes `pattern` and `count`.
+  anomalyDetected,
 }
 
 /// A single security event emitted by the crypto layer.
