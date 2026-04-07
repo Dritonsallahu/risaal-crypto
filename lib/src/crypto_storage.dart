@@ -127,6 +127,78 @@ class CryptoStorage {
     return int.tryParse(raw);
   }
 
+  // ── Previous Signed Pre-Key (48h overlap) ──────────────────────
+
+  static const _keyPreviousSignedPreKey = 'crypto_previous_signed_pre_key';
+  static const _keyPreviousSpkExpiry = 'crypto_previous_spk_expiry';
+
+  Future<void> savePreviousSignedPreKey(
+    SignedPreKey key,
+    int expiryEpochMs,
+  ) async {
+    await _secureStorage.write(
+      key: _keyPreviousSignedPreKey,
+      value: jsonEncode(key.toJson()),
+    );
+    await _secureStorage.write(
+      key: _keyPreviousSpkExpiry,
+      value: expiryEpochMs.toString(),
+    );
+  }
+
+  Future<SignedPreKey?> getPreviousSignedPreKey() async {
+    final raw = await _secureStorage.read(key: _keyPreviousSignedPreKey);
+    if (raw == null) return null;
+    return SignedPreKey.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<int?> getPreviousSpkExpiry() async {
+    final raw = await _secureStorage.read(key: _keyPreviousSpkExpiry);
+    if (raw == null) return null;
+    return int.tryParse(raw);
+  }
+
+  Future<void> deletePreviousSignedPreKey() async {
+    await _secureStorage.delete(key: _keyPreviousSignedPreKey);
+    await _secureStorage.delete(key: _keyPreviousSpkExpiry);
+  }
+
+  // ── Previous Kyber Key (48h overlap) ───────────────────────────
+
+  static const _keyPreviousKyberKP = 'crypto_previous_kyber_key_pair';
+  static const _keyPreviousKyberExpiry = 'crypto_previous_kyber_expiry';
+
+  Future<void> savePreviousKyberKeyPair(
+    KyberKeyPair keyPair,
+    int expiryEpochMs,
+  ) async {
+    await _secureStorage.write(
+      key: _keyPreviousKyberKP,
+      value: jsonEncode(keyPair.toJson()),
+    );
+    await _secureStorage.write(
+      key: _keyPreviousKyberExpiry,
+      value: expiryEpochMs.toString(),
+    );
+  }
+
+  Future<KyberKeyPair?> getPreviousKyberKeyPair() async {
+    final raw = await _secureStorage.read(key: _keyPreviousKyberKP);
+    if (raw == null) return null;
+    return KyberKeyPair.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<int?> getPreviousKyberExpiry() async {
+    final raw = await _secureStorage.read(key: _keyPreviousKyberExpiry);
+    if (raw == null) return null;
+    return int.tryParse(raw);
+  }
+
+  Future<void> deletePreviousKyberKeyPair() async {
+    await _secureStorage.delete(key: _keyPreviousKyberKP);
+    await _secureStorage.delete(key: _keyPreviousKyberExpiry);
+  }
+
   // ── Peer Capability Tracking (anti-downgrade) ─────────────────────
 
   String _peerCapKey(String userId, String deviceId) =>

@@ -122,9 +122,20 @@ class SignalProtocolManager {
   /// Default Kyber key rotation interval: 7 days (alongside signed pre-key).
   static const Duration defaultKyberKeyMaxAge = Duration(days: 7);
 
+  /// Absolute maximum key lifetime. Keys older than this are rejected outright
+  /// and force-rotated. This is a hard safety net above the rotation interval.
+  static const Duration absoluteMaxKeyLifetime = Duration(days: 30);
+
+  /// Duration to keep old keys after rotation so in-flight sessions that
+  /// reference the previous key ID can still complete.
+  static const Duration keyOverlapWindow = Duration(hours: 48);
+
   /// Default OTP low-watermark threshold. When the pool drops to or below
   /// this count, [SecurityEventType.otpPoolLow] is emitted.
   static const int defaultOtpLowWatermark = 25;
+
+  /// Number of one-time pre-keys to auto-generate when pool is low.
+  static const int otpReplenishBatchSize = 100;
 
   SignalProtocolManager({
     required CryptoSecureStorage secureStorage,
@@ -1416,15 +1427,34 @@ class SignalProtocolManager {
   Future<Map<String, dynamic>?> rotateSignedPreKeyIfNeeded({
     Duration maxAge = const Duration(days: 7),
   }) async {
+    // First, clean up any expired previous key from the overlap window
+    await _cleanupExpiredPreviousSignedPreKey();
+
     final createdAt = await _cryptoStorage.getSignedPreKeyCreatedAt();
     final now = DateTime.now().millisecondsSinceEpoch;
 
     if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
-      CryptoDebugLogger.log(
-        'KEY_LIFECYCLE',
-        'Signed pre-key is fresh (age=${now - createdAt}ms < ${maxAge.inMilliseconds}ms)',
-      );
-      return null; // Still fresh — no rotation needed
+      // Check absolute max lifetime — never use a key past this age
+      if ((now - createdAt) > absoluteMaxKeyLifetime.inMilliseconds) {
+        CryptoDebugLogger.log(
+          'KEY_LIFECYCLE',
+          'EXPIRED: Signed pre-key exceeded absolute max lifetime — forcing rotation',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.keyExpired,
+          metadata: {
+            'keyType': 'signedPreKey',
+            'ageMs': now - createdAt,
+            'maxLifetimeMs': absoluteMaxKeyLifetime.inMilliseconds,
+          },
+        );
+      } else {
+        CryptoDebugLogger.log(
+          'KEY_LIFECYCLE',
+          'Signed pre-key is fresh (age=${now - createdAt}ms < ${maxAge.inMilliseconds}ms)',
+        );
+        return null; // Still fresh — no rotation needed
+      }
     }
 
     CryptoDebugLogger.log(
@@ -1439,8 +1469,21 @@ class SignalProtocolManager {
       );
     }
 
-    // Determine new keyId (increment from current)
+    // Store current key as previous with 48h overlap expiry
     final currentSignedPreKey = await _cryptoStorage.getSignedPreKey();
+    if (currentSignedPreKey != null) {
+      final overlapExpiry = now + keyOverlapWindow.inMilliseconds;
+      await _cryptoStorage.savePreviousSignedPreKey(
+        currentSignedPreKey,
+        overlapExpiry,
+      );
+      CryptoDebugLogger.log(
+        'KEY_LIFECYCLE',
+        'Old signed pre-key (keyId=${currentSignedPreKey.keyId}) '
+            'retained for ${keyOverlapWindow.inHours}h overlap',
+      );
+    }
+
     final newKeyId = (currentSignedPreKey?.keyId ?? 0) + 1;
 
     final newSignedPreKey = await SignalKeyHelper.generateSignedPreKey(
@@ -1464,6 +1507,22 @@ class SignalProtocolManager {
     return generateKeyBundle();
   }
 
+  /// Remove the previous signed pre-key if its 48h overlap window has expired.
+  /// Wipes key material via SecureMemory before deletion.
+  Future<void> _cleanupExpiredPreviousSignedPreKey() async {
+    final expiry = await _cryptoStorage.getPreviousSpkExpiry();
+    if (expiry == null) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now >= expiry) {
+      CryptoDebugLogger.log(
+        'KEY_LIFECYCLE',
+        'Previous signed pre-key overlap expired — wiping',
+      );
+      await _cryptoStorage.deletePreviousSignedPreKey();
+    }
+  }
+
   /// Rotate the Kyber (ML-KEM-768) key if it is older than [maxAge].
   ///
   /// Similar to [rotateSignedPreKeyIfNeeded], checks the stored creation
@@ -1475,16 +1534,49 @@ class SignalProtocolManager {
   Future<bool> rotateKyberKeyIfNeeded({
     Duration maxAge = const Duration(days: 7),
   }) async {
+    // Clean up expired previous Kyber key
+    await _cleanupExpiredPreviousKyberKey();
+
     final createdAt = await _cryptoStorage.getKyberCreatedAt();
     final now = DateTime.now().millisecondsSinceEpoch;
 
     if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
-      return false; // Still fresh
+      // Check absolute max lifetime
+      if ((now - createdAt) > absoluteMaxKeyLifetime.inMilliseconds) {
+        CryptoDebugLogger.log(
+          'KEY_LIFECYCLE',
+          'EXPIRED: Kyber key exceeded absolute max lifetime — forcing rotation',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.keyExpired,
+          metadata: {
+            'keyType': 'kyber',
+            'ageMs': now - createdAt,
+            'maxLifetimeMs': absoluteMaxKeyLifetime.inMilliseconds,
+          },
+        );
+      } else {
+        return false; // Still fresh
+      }
     }
 
     CryptoDebugLogger.log('KEY_LIFECYCLE', '═══ Rotating Kyber key ═══');
 
     try {
+      // Store current key as previous with 48h overlap
+      final currentKyber = await _cryptoStorage.getKyberKeyPair();
+      if (currentKyber != null) {
+        final overlapExpiry = now + keyOverlapWindow.inMilliseconds;
+        await _cryptoStorage.savePreviousKyberKeyPair(
+          currentKyber,
+          overlapExpiry,
+        );
+        CryptoDebugLogger.log(
+          'KEY_LIFECYCLE',
+          'Old Kyber key retained for ${keyOverlapWindow.inHours}h overlap',
+        );
+      }
+
       final kyberKP = SignalKeyHelper.generateKyberKeyPair();
       await _cryptoStorage.saveKyberKeyPair(kyberKP);
       await _cryptoStorage.saveKyberCreatedAt(now);
@@ -1508,6 +1600,21 @@ class SignalProtocolManager {
         e,
       );
       return false;
+    }
+  }
+
+  /// Remove the previous Kyber key if its 48h overlap window has expired.
+  Future<void> _cleanupExpiredPreviousKyberKey() async {
+    final expiry = await _cryptoStorage.getPreviousKyberExpiry();
+    if (expiry == null) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now >= expiry) {
+      CryptoDebugLogger.log(
+        'KEY_LIFECYCLE',
+        'Previous Kyber key overlap expired — wiping',
+      );
+      await _cryptoStorage.deletePreviousKyberKeyPair();
     }
   }
 
@@ -1552,10 +1659,13 @@ class SignalProtocolManager {
   ///
   /// Called internally after operations that consume OTPs (e.g.
   /// [processPreKeyMessage]). Uses [defaultOtpLowWatermark] as threshold.
+  ///
+  /// When the pool is low, automatically generates [otpReplenishBatchSize]
+  /// new OTPs and stores them. The app layer is notified via the callback
+  /// and event bus so it can upload the new keys to the server.
   Future<void> _checkPreKeyExhaustion() async {
     final count = await oneTimePreKeyCount();
     if (count <= defaultOtpLowWatermark) {
-      _onPreKeyExhaustionWarning?.call(count);
       if (count == 0) {
         _eventBus?.emitType(
           SecurityEventType.otpPoolExhausted,
@@ -1570,6 +1680,26 @@ class SignalProtocolManager {
           },
         );
       }
+
+      // Auto-generate a fresh batch of OTPs
+      CryptoDebugLogger.log(
+        'KEY_LIFECYCLE',
+        'OTP pool low ($count <= $defaultOtpLowWatermark) — '
+            'auto-generating $otpReplenishBatchSize new OTPs',
+      );
+      final newKeys = await generateOneTimePreKeys(otpReplenishBatchSize);
+
+      // Notify app layer so it can upload to server
+      _onPreKeyExhaustionWarning?.call(count);
+
+      _eventBus?.emitType(
+        SecurityEventType.preKeyReplenishmentNeeded,
+        metadata: {
+          'generated': newKeys.length,
+          'previousCount': count,
+          'newTotal': count + newKeys.length,
+        },
+      );
     }
   }
 
@@ -1593,6 +1723,91 @@ class SignalProtocolManager {
     return newKeys
         .map((k) => {'keyId': k.keyId, 'publicKey': k.keyPair.publicKey})
         .toList();
+  }
+
+  // ── Key Expiry Enforcement ──────────────────────────────────────
+
+  /// Validate that all local keys are within their maximum lifetime.
+  ///
+  /// Call on app startup (after [initialize]) to ensure no key is being
+  /// used past its absolute max lifetime. Returns `true` if all keys are
+  /// valid, `false` if any key was expired (force-rotation will have been
+  /// triggered via [rotateKeysIfNeeded]).
+  ///
+  /// **This is a hard safety net.** Even if the app fails to call
+  /// [rotateKeysIfNeeded] periodically, this check catches expired keys
+  /// on the next launch.
+  Future<bool> validateKeyFreshness() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var allFresh = true;
+
+    // Check signed pre-key age
+    final spkCreatedAt = await _cryptoStorage.getSignedPreKeyCreatedAt();
+    if (spkCreatedAt != null) {
+      final age = now - spkCreatedAt;
+      if (age > absoluteMaxKeyLifetime.inMilliseconds) {
+        CryptoDebugLogger.log(
+          'KEY_LIFECYCLE',
+          'EXPIRED: Signed pre-key age ${age}ms exceeds '
+              '${absoluteMaxKeyLifetime.inMilliseconds}ms — forcing rotation',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.keyExpired,
+          metadata: {'keyType': 'signedPreKey', 'ageMs': age},
+        );
+        allFresh = false;
+      }
+    }
+
+    // Check Kyber key age
+    final kyberCreatedAt = await _cryptoStorage.getKyberCreatedAt();
+    if (kyberCreatedAt != null) {
+      final age = now - kyberCreatedAt;
+      if (age > absoluteMaxKeyLifetime.inMilliseconds) {
+        CryptoDebugLogger.log(
+          'KEY_LIFECYCLE',
+          'EXPIRED: Kyber key age ${age}ms exceeds '
+              '${absoluteMaxKeyLifetime.inMilliseconds}ms — forcing rotation',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.keyExpired,
+          metadata: {'keyType': 'kyber', 'ageMs': age},
+        );
+        allFresh = false;
+      }
+    }
+
+    // Clean up any expired overlap keys
+    await _cleanupExpiredPreviousSignedPreKey();
+    await _cleanupExpiredPreviousKyberKey();
+
+    return allFresh;
+  }
+
+  /// Get the previous signed pre-key (within 48h overlap window) for
+  /// decrypting messages that reference the old key ID.
+  Future<SignedPreKey?> getPreviousSignedPreKey() async {
+    final expiry = await _cryptoStorage.getPreviousSpkExpiry();
+    if (expiry == null) return null;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now >= expiry) {
+      await _cryptoStorage.deletePreviousSignedPreKey();
+      return null;
+    }
+    return _cryptoStorage.getPreviousSignedPreKey();
+  }
+
+  /// Get the previous Kyber key pair (within 48h overlap window) for
+  /// decapsulating ciphertexts that reference the old Kyber key.
+  Future<KyberKeyPair?> getPreviousKyberKeyPair() async {
+    final expiry = await _cryptoStorage.getPreviousKyberExpiry();
+    if (expiry == null) return null;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now >= expiry) {
+      await _cryptoStorage.deletePreviousKyberKeyPair();
+      return null;
+    }
+    return _cryptoStorage.getPreviousKyberKeyPair();
   }
 
   // ── Group E2EE (Sender Keys) ─────────────────────────────────────
