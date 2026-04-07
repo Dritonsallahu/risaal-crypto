@@ -60,7 +60,8 @@ Future<void> main() async {
   // ── ML-KEM-768 / Kyber (Post-Quantum) ──────────────────────────
   try {
     final kyberKP = SignalKeyHelper.generateKyberKeyPair();
-    print('Kyber public key length: ${base64Decode(kyberKP.publicKey).length} bytes');
+    print(
+        'Kyber public key length: ${base64Decode(kyberKP.publicKey).length} bytes');
 
     // Encapsulate (sender side)
     final (ciphertext, sharedSecret) = SignalKeyHelper.kyberEncapsulate(

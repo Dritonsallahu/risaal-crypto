@@ -66,8 +66,8 @@ Future<void> main() async {
     ),
     oneTimePreKey: (bobBundle['oneTimePreKeys'] as List).isNotEmpty
         ? OneTimePreKeyPublic(
-            keyId: ((bobBundle['oneTimePreKeys'] as List)[0]
-                as Map)['keyId'] as int,
+            keyId: ((bobBundle['oneTimePreKeys'] as List)[0] as Map)['keyId']
+                as int,
             publicKey: ((bobBundle['oneTimePreKeys'] as List)[0]
                 as Map)['publicKey'] as String,
           )
@@ -86,8 +86,8 @@ Future<void> main() async {
     ),
     oneTimePreKey: (carolBundle['oneTimePreKeys'] as List).isNotEmpty
         ? OneTimePreKeyPublic(
-            keyId: ((carolBundle['oneTimePreKeys'] as List)[0]
-                as Map)['keyId'] as int,
+            keyId: ((carolBundle['oneTimePreKeys'] as List)[0] as Map)['keyId']
+                as int,
             publicKey: ((carolBundle['oneTimePreKeys'] as List)[0]
                 as Map)['publicKey'] as String,
           )
