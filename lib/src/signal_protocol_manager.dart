@@ -99,6 +99,18 @@ class SignalProtocolManager {
     _onPreKeyReplenishmentNeeded = callback;
   }
 
+  /// Optional callback invoked when the one-time pre-key count drops
+  /// below the exhaustion threshold.
+  void Function(int remaining)? _onPreKeyExhaustionWarning;
+
+  /// Set the pre-key exhaustion warning callback.
+  set onPreKeyExhaustionWarning(void Function(int remaining)? callback) {
+    _onPreKeyExhaustionWarning = callback;
+  }
+
+  /// Default signed pre-key rotation interval: 7 days.
+  static const Duration defaultSignedPreKeyMaxAge = Duration(days: 7);
+
   SignalProtocolManager({required CryptoSecureStorage secureStorage})
     : _cryptoStorage = CryptoStorage(secureStorage: secureStorage) {
     _senderKeyManager = SenderKeyManager(cryptoStorage: _cryptoStorage);
@@ -170,6 +182,9 @@ class SignalProtocolManager {
       signingKP, // Sign with Ed25519 signing key
     );
     await _cryptoStorage.saveSignedPreKey(signedPreKey);
+    await _cryptoStorage.saveSignedPreKeyCreatedAt(
+      DateTime.now().millisecondsSinceEpoch,
+    );
     CryptoDebugLogger.logKeyInfo(
       'INIT',
       'Generated signed pre-key',
@@ -248,6 +263,8 @@ class SignalProtocolManager {
       );
     }
 
+    final createdAtMs = await _cryptoStorage.getSignedPreKeyCreatedAt();
+
     return {
       'identityKey': identityKP.publicKey, // X25519 DH public key
       'identitySigningKey': signingKP.publicKey, // Ed25519 signing public key
@@ -261,6 +278,7 @@ class SignalProtocolManager {
           .toList(),
       if (kyberKP != null)
         'kyberPreKey': {'keyId': 0, 'publicKey': kyberKP.publicKey},
+      'createdAt': createdAtMs ?? DateTime.now().millisecondsSinceEpoch,
     };
   }
 
@@ -523,6 +541,8 @@ class SignalProtocolManager {
         'X3DH',
         'Removed consumed OTP key $usedOneTimePreKeyId',
       );
+      // Check if OTPs are running low and fire exhaustion callback
+      await _checkPreKeyExhaustion();
     }
 
     // Initialise ratchet as receiver
@@ -1281,6 +1301,101 @@ class SignalProtocolManager {
       theirUserId: theirUserId,
       theirIdentityKey: theirIdentityKey,
     );
+  }
+
+  // ── Key Lifecycle ─────────────────────────────────────────────────
+
+  /// Return the age of the current signed pre-key in milliseconds.
+  ///
+  /// Returns 0 if no creation timestamp is stored (e.g. first-run keys
+  /// generated before lifecycle tracking was added).
+  Future<int> signedPreKeyAge() async {
+    final createdAt = await _cryptoStorage.getSignedPreKeyCreatedAt();
+    if (createdAt == null) return 0;
+    return DateTime.now().millisecondsSinceEpoch - createdAt;
+  }
+
+  /// Rotate the signed pre-key if it is older than [maxAge].
+  ///
+  /// Checks the stored creation timestamp against the current time. If the
+  /// signed pre-key exceeds [maxAge] (default 7 days), a new signed pre-key
+  /// is generated, signed with the Ed25519 signing key, and persisted.
+  ///
+  /// Returns the updated key bundle (for re-upload to the server) if rotation
+  /// occurred, or `null` if the key is still fresh.
+  ///
+  /// Call this periodically (e.g. on app foreground) to ensure key hygiene.
+  Future<Map<String, dynamic>?> rotateSignedPreKeyIfNeeded({
+    Duration maxAge = const Duration(days: 7),
+  }) async {
+    final createdAt = await _cryptoStorage.getSignedPreKeyCreatedAt();
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
+      CryptoDebugLogger.log(
+        'KEY_LIFECYCLE',
+        'Signed pre-key is fresh (age=${now - createdAt}ms < ${maxAge.inMilliseconds}ms)',
+      );
+      return null; // Still fresh — no rotation needed
+    }
+
+    CryptoDebugLogger.log(
+      'KEY_LIFECYCLE',
+      '═══ Rotating signed pre-key ═══',
+    );
+
+    final signingKP = await _cryptoStorage.getSigningKeyPair();
+    if (signingKP == null) {
+      throw StateError(
+        'Signing key pair not found. Call initialize() first.',
+      );
+    }
+
+    // Determine new keyId (increment from current)
+    final currentSignedPreKey = await _cryptoStorage.getSignedPreKey();
+    final newKeyId = (currentSignedPreKey?.keyId ?? 0) + 1;
+
+    final newSignedPreKey = await SignalKeyHelper.generateSignedPreKey(
+      newKeyId,
+      signingKP,
+    );
+    await _cryptoStorage.saveSignedPreKey(newSignedPreKey);
+    await _cryptoStorage.saveSignedPreKeyCreatedAt(now);
+
+    CryptoDebugLogger.logKeyInfo(
+      'KEY_LIFECYCLE',
+      'Rotated signed pre-key (keyId=$newKeyId)',
+      newSignedPreKey.keyPair.publicKey,
+    );
+
+    return generateKeyBundle();
+  }
+
+  /// Return the number of one-time pre-keys currently stored locally.
+  Future<int> oneTimePreKeyCount() async {
+    final keys = await _cryptoStorage.getOneTimePreKeys();
+    return keys.length;
+  }
+
+  /// Whether the one-time pre-key count is at or below [threshold].
+  ///
+  /// Returns `true` if exhaustion is near (time to generate and upload more
+  /// one-time pre-keys to the server).
+  Future<bool> isPreKeyExhaustionNear({int threshold = 10}) async {
+    final count = await oneTimePreKeyCount();
+    return count <= threshold;
+  }
+
+  /// Check OTP exhaustion and fire the warning callback if needed.
+  ///
+  /// Called internally after operations that consume OTPs (e.g.
+  /// [processPreKeyMessage]).
+  Future<void> _checkPreKeyExhaustion({int threshold = 10}) async {
+    if (_onPreKeyExhaustionWarning == null) return;
+    final count = await oneTimePreKeyCount();
+    if (count <= threshold) {
+      _onPreKeyExhaustionWarning!(count);
+    }
   }
 
   // ── One-Time Pre-Key Replenishment ────────────────────────────────

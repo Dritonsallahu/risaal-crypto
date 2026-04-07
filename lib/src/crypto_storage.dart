@@ -18,6 +18,7 @@ class CryptoStorage {
   static const _keyIdentityKP = 'crypto_identity_key_pair';
   static const _keySigningKP = 'crypto_signing_key_pair';
   static const _keySignedPreKey = 'crypto_signed_pre_key';
+  static const _keySignedPreKeyCreatedAt = 'crypto_signed_prekey_created_at';
   static const _keyOneTimePreKeys = 'crypto_one_time_pre_keys';
   static const _keySessionPrefix = 'crypto_session_';
   static const _keyKyberKP = 'crypto_kyber_key_pair';
@@ -63,6 +64,20 @@ class CryptoStorage {
     final raw = await _secureStorage.read(key: _keySignedPreKey);
     if (raw == null) return null;
     return SignedPreKey.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  // ── Signed Pre-Key Creation Timestamp ────────────────────────────
+
+  Future<void> saveSignedPreKeyCreatedAt(int epochMs) =>
+      _secureStorage.write(
+        key: _keySignedPreKeyCreatedAt,
+        value: epochMs.toString(),
+      );
+
+  Future<int?> getSignedPreKeyCreatedAt() async {
+    final raw = await _secureStorage.read(key: _keySignedPreKeyCreatedAt);
+    if (raw == null) return null;
+    return int.tryParse(raw);
   }
 
   // ── One-Time Pre-Keys ─────────────────────────────────────────────
