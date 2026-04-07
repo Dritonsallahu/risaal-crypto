@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' hide KeyPair;
 
+import 'crypto_debug_logger.dart';
 import 'secure_memory.dart';
 import 'key_helper.dart';
 import 'models/signal_keys.dart';
@@ -20,14 +21,26 @@ class X3DHResult {
 
   /// Base64-encoded Kyber ciphertext (sent to the responder so they
   /// can decapsulate and derive the same shared secret). Null if the
-  /// recipient's bundle didn't include a Kyber pre-key.
+  /// recipient's bundle didn't include a Kyber pre-key or if the
+  /// [PqxdhPolicy] was [PqxdhPolicy.classicalOnly].
   final String? kyberCiphertext;
+
+  /// Whether the post-quantum Kyber component was successfully used.
+  ///
+  /// `true` if Kyber encapsulation succeeded and the Kyber shared secret
+  /// was mixed into the final key material. `false` if the session was
+  /// established with classical X25519-only security.
+  ///
+  /// Callers should inspect this flag to display a security indicator
+  /// (e.g., "Post-quantum protected" vs "Classical security only").
+  final bool pqxdhUsed;
 
   const X3DHResult({
     required this.sharedSecret,
     required this.ephemeralPublicKey,
     this.usedOneTimePreKeyId,
     this.kyberCiphertext,
+    required this.pqxdhUsed,
   });
 }
 
@@ -51,23 +64,27 @@ class X3DH {
   /// 4. DH3 = DH(EK_A, SPK_B)
   /// 5. DH4 = DH(EK_A, OPK_B) — if available
   /// 6. SK  = HKDF(DH1 || DH2 || DH3 [|| DH4])
+  ///
+  /// The [pqxdhPolicy] controls post-quantum Kyber handling:
+  ///   - [PqxdhPolicy.requirePq]: Abort if Kyber fails or is unavailable
+  ///   - [PqxdhPolicy.preferPq]: Use Kyber if available, degrade with warning
+  ///   - [PqxdhPolicy.classicalOnly]: Skip Kyber entirely
   static Future<X3DHResult> initiateKeyAgreement({
     required KeyPair identityKeyPair,
     required PreKeyBundle recipientBundle,
+    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.preferPq,
   }) async {
     // Verify the signed pre-key signature using the recipient's Ed25519
-    // signing key (if available). Falls back to skipping verification when
-    // the bundle doesn't include a signing key (pre-upgrade bundles).
-    final signingKey = recipientBundle.identitySigningKey;
-    if (signingKey != null) {
-      final signatureValid = await SignalKeyHelper.verify(
-        signingKey,
-        base64Decode(recipientBundle.signedPreKey.publicKey),
-        recipientBundle.signedPreKey.signature,
-      );
-      if (!signatureValid) {
-        throw StateError('Signed pre-key signature verification failed');
-      }
+    // signing key. Verification is mandatory — bundles without a signing
+    // key are rejected at the model layer, and invalid signatures abort
+    // session establishment to prevent impersonation attacks.
+    final signatureValid = await SignalKeyHelper.verify(
+      recipientBundle.identitySigningKey,
+      base64Decode(recipientBundle.signedPreKey.publicKey),
+      recipientBundle.signedPreKey.signature,
+    );
+    if (!signatureValid) {
+      throw StateError('Signed pre-key signature verification failed');
     }
 
     // Generate ephemeral key pair
@@ -97,22 +114,52 @@ class X3DH {
       usedOPKId = recipientBundle.oneTimePreKey!.keyId;
     }
 
-    // Kyber KEM encapsulation (post-quantum layer) — optional
-    // If the recipient published a Kyber pre-key, encapsulate against it
-    // so the shared secret is protected by BOTH X25519 AND Kyber.
-    // Wrapped in try/catch: if Kyber fails (e.g. platform FFI issue),
-    // we degrade gracefully to pure X25519 X3DH.
+    // Kyber KEM encapsulation (post-quantum layer) — policy-controlled.
+    // The PqxdhPolicy determines how failures and missing keys are handled.
     List<int>? kyberSharedSecret;
     String? kyberCiphertext;
-    if (recipientBundle.kyberPreKey != null) {
+    var pqxdhUsed = false;
+
+    if (pqxdhPolicy == PqxdhPolicy.classicalOnly) {
+      // Classical only — skip Kyber entirely, even if bundle has a key.
+      CryptoDebugLogger.log(
+        'X3DH',
+        'PQXDH policy=classicalOnly — skipping Kyber',
+      );
+    } else if (recipientBundle.kyberPreKey == null) {
+      // Bundle has no Kyber key
+      if (pqxdhPolicy == PqxdhPolicy.requirePq) {
+        throw StateError(
+          'PQXDH required but recipient bundle has no Kyber pre-key',
+        );
+      }
+      // preferPq: log warning and continue without PQ
+      CryptoDebugLogger.log(
+        'X3DH',
+        'WARNING: PQXDH preferred but recipient has no Kyber key — '
+        'degrading to classical X25519-only',
+      );
+    } else {
+      // Bundle has Kyber key — attempt encapsulation
       try {
         final (ct, ss) = SignalKeyHelper.kyberEncapsulate(
           recipientBundle.kyberPreKey!.publicKey,
         );
         kyberCiphertext = ct;
         kyberSharedSecret = ss;
+        pqxdhUsed = true;
       } catch (e) {
-        // Kyber failed — degrade to pure X25519
+        if (pqxdhPolicy == PqxdhPolicy.requirePq) {
+          throw StateError(
+            'PQXDH required but Kyber encapsulation failed: $e',
+          );
+        }
+        // preferPq: log warning and continue without PQ
+        CryptoDebugLogger.log(
+          'X3DH',
+          'WARNING: Kyber encapsulation failed — degrading to '
+          'classical X25519-only: $e',
+        );
         kyberSharedSecret = null;
         kyberCiphertext = null;
       }
@@ -143,6 +190,7 @@ class X3DH {
       ephemeralPublicKey: ephemeralKeyPair.publicKey,
       usedOneTimePreKeyId: usedOPKId,
       kyberCiphertext: kyberCiphertext,
+      pqxdhUsed: pqxdhUsed,
     );
   }
 
@@ -150,6 +198,12 @@ class X3DH {
 
   /// Bob computes the same shared secret upon receiving Alice's first
   /// message.
+  ///
+  /// The [pqxdhPolicy] controls post-quantum Kyber handling on the
+  /// responder side (mirrors the initiator's policy):
+  ///   - [PqxdhPolicy.requirePq]: Abort if Kyber decapsulation fails
+  ///   - [PqxdhPolicy.preferPq]: Degrade with warning if Kyber fails
+  ///   - [PqxdhPolicy.classicalOnly]: Ignore Kyber ciphertext
   static Future<List<int>> respondKeyAgreement({
     required KeyPair identityKeyPair,
     required SignedPreKey signedPreKey,
@@ -158,6 +212,7 @@ class X3DH {
     required String senderEphemeralKey,
     KyberKeyPair? kyberKeyPair,
     String? kyberCiphertext,
+    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.preferPq,
   }) async {
     final ikB = await _buildKeyPair(identityKeyPair);
     final spkB = await _buildKeyPair(signedPreKey.keyPair);
@@ -180,20 +235,40 @@ class X3DH {
       dh4 = await _dh(opkB, ekA);
     }
 
-    // Kyber KEM decapsulation (post-quantum layer) — optional
-    // Wrapped in try/catch: must match initiator's behavior exactly.
-    // If initiator's Kyber failed (no ciphertext sent), we skip too.
+    // Kyber KEM decapsulation (post-quantum layer) — policy-controlled.
     List<int>? kyberSharedSecret;
-    if (kyberKeyPair != null && kyberCiphertext != null) {
+    if (pqxdhPolicy == PqxdhPolicy.classicalOnly) {
+      // Classical only — ignore Kyber ciphertext even if present.
+      CryptoDebugLogger.log(
+        'X3DH',
+        'PQXDH policy=classicalOnly (responder) — skipping Kyber',
+      );
+    } else if (kyberKeyPair != null && kyberCiphertext != null) {
       try {
         kyberSharedSecret = SignalKeyHelper.kyberDecapsulate(
           kyberKeyPair.privateKey,
           kyberCiphertext,
         );
       } catch (e) {
-        // Kyber failed — degrade to pure X25519 (must match initiator)
+        if (pqxdhPolicy == PqxdhPolicy.requirePq) {
+          throw StateError(
+            'PQXDH required but Kyber decapsulation failed: $e',
+          );
+        }
+        // preferPq: log warning and continue without PQ
+        CryptoDebugLogger.log(
+          'X3DH',
+          'WARNING: Kyber decapsulation failed (responder) — '
+          'degrading to classical X25519-only: $e',
+        );
         kyberSharedSecret = null;
       }
+    } else if (pqxdhPolicy == PqxdhPolicy.requirePq) {
+      // requirePq but no Kyber material available
+      throw StateError(
+        'PQXDH required but no Kyber key pair or ciphertext available '
+        'for decapsulation',
+      );
     }
 
     final dhConcat = <int>[

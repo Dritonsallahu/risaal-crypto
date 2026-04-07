@@ -51,7 +51,7 @@ Future<void> main() async {
     userId: 'bob-001',
     deviceId: 'bob-device-1',
     identityKey: bobBundle['identityKey'] as String,
-    identitySigningKey: bobBundle['identitySigningKey'] as String?,
+    identitySigningKey: bobBundle['identitySigningKey'] as String,
     signedPreKey: SignedPreKeyPublic(
       keyId: (bobBundle['signedPreKey'] as Map)['keyId'] as int,
       publicKey: (bobBundle['signedPreKey'] as Map)['publicKey'] as String,

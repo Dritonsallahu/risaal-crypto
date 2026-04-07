@@ -1,3 +1,44 @@
+/// Post-quantum key agreement policy for PQXDH (hybrid X3DH + Kyber).
+///
+/// Controls how the protocol handles the Kyber-768 (ML-KEM) post-quantum
+/// component during session establishment. This policy prevents silent
+/// degradation attacks where an attacker forces a downgrade from hybrid
+/// PQXDH to classical X25519-only key agreement.
+///
+/// Security guidance:
+///   - Use [requirePq] in high-security contexts where post-quantum
+///     protection is mandatory (e.g., government, defense).
+///   - Use [preferPq] (default) for general use — provides PQ protection
+///     when available but allows fallback with a logged warning.
+///   - Use [classicalOnly] only for testing or known-incompatible peers.
+enum PqxdhPolicy {
+  /// Require Kyber — abort session if PQ component fails or is unavailable.
+  ///
+  /// Throws [StateError] if:
+  ///   - The recipient's bundle has no Kyber pre-key
+  ///   - Kyber encapsulation/decapsulation fails (FFI error, bad key, etc.)
+  ///
+  /// Use this when post-quantum protection is non-negotiable.
+  requirePq,
+
+  /// Prefer Kyber — use if available, degrade with warning if not.
+  ///
+  /// This is the default policy. If Kyber fails, the session is established
+  /// with X25519-only (classical security). A warning is logged via
+  /// [CryptoDebugLogger] so degradation is never silent.
+  ///
+  /// The caller should check [X3DHResult.pqxdhUsed] to know if PQ
+  /// protection was applied.
+  preferPq,
+
+  /// Classical only — X25519 only, no Kyber.
+  ///
+  /// Skips the Kyber component entirely, even if the recipient's bundle
+  /// includes a Kyber pre-key. Use for testing or backward compatibility
+  /// with peers that don't support Kyber decapsulation.
+  classicalOnly,
+}
+
 /// Base64-encoded asymmetric key pair for storage and transport.
 ///
 /// Used for X25519 (DH) and Ed25519 (signing) key pairs. Both keys are
@@ -229,8 +270,11 @@ class PreKeyBundle {
 
   /// Base64-encoded Ed25519 public key (for signature verification).
   ///
-  /// May be `null` for legacy clients that only use X25519.
-  final String? identitySigningKey;
+  /// Required for all bundles. The signing key is used to verify the signed
+  /// pre-key signature during X3DH, preventing impersonation attacks. Bundles
+  /// without a signing key are rejected to prevent downgrade attacks where an
+  /// attacker strips the key to bypass signature verification.
+  final String identitySigningKey;
 
   /// The recipient's current signed pre-key (always present).
   final SignedPreKeyPublic signedPreKey;
@@ -249,7 +293,7 @@ class PreKeyBundle {
     required this.userId,
     required this.deviceId,
     required this.identityKey,
-    this.identitySigningKey,
+    required this.identitySigningKey,
     required this.signedPreKey,
     this.oneTimePreKey,
     this.kyberPreKey,
@@ -259,18 +303,26 @@ class PreKeyBundle {
         'userId': userId,
         'deviceId': deviceId,
         'identityKey': identityKey,
-        if (identitySigningKey != null)
-          'identitySigningKey': identitySigningKey,
+        'identitySigningKey': identitySigningKey,
         'signedPreKey': signedPreKey.toJson(),
         if (oneTimePreKey != null) 'oneTimePreKey': oneTimePreKey!.toJson(),
         if (kyberPreKey != null) 'kyberPreKey': kyberPreKey!.toJson(),
       };
 
-  factory PreKeyBundle.fromJson(Map<String, dynamic> json) => PreKeyBundle(
+  factory PreKeyBundle.fromJson(Map<String, dynamic> json) {
+    final signingKey = json['identitySigningKey'];
+    if (signingKey == null || signingKey is! String || signingKey.isEmpty) {
+      throw StateError(
+        'PreKeyBundle requires identitySigningKey — '
+        'bundles without a signing key are rejected to prevent '
+        'signature verification downgrade attacks.',
+      );
+    }
+    return PreKeyBundle(
         userId: json['userId'] as String,
         deviceId: json['deviceId'] as String,
         identityKey: json['identityKey'] as String,
-        identitySigningKey: json['identitySigningKey'] as String?,
+        identitySigningKey: signingKey,
         signedPreKey: SignedPreKeyPublic.fromJson(
           json['signedPreKey'] as Map<String, dynamic>,
         ),
@@ -285,6 +337,7 @@ class PreKeyBundle {
               )
             : null,
       );
+  }
 
   /// Parse from the server's JSON response format.
   factory PreKeyBundle.fromServerJson(Map<String, dynamic> json) =>

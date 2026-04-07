@@ -21,7 +21,7 @@ PreKeyBundle _bundleFromMap(
     userId: userId,
     deviceId: deviceId,
     identityKey: bundle['identityKey'] as String,
-    identitySigningKey: bundle['identitySigningKey'] as String?,
+    identitySigningKey: bundle['identitySigningKey'] as String,
     signedPreKey: SignedPreKeyPublic(
       keyId: signedPreKey['keyId'] as int,
       publicKey: signedPreKey['publicKey'] as String,

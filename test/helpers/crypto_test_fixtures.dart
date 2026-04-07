@@ -90,7 +90,7 @@ class CryptoTestFixtures {
     // Get Bob's key bundle
     final bobBundle = await bob.generateKeyBundle();
     final bobIdentityKey = bobBundle['identityKey'] as String;
-    final bobSigningKey = bobBundle['identitySigningKey'] as String?;
+    final bobSigningKey = bobBundle['identitySigningKey'] as String;
     final bobSignedPreKey = bobBundle['signedPreKey'] as Map<String, dynamic>;
     final bobOneTimePreKeys = bobBundle['oneTimePreKeys'] as List<dynamic>;
 
