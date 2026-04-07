@@ -137,6 +137,12 @@ class SignalProtocolManager {
   /// Number of one-time pre-keys to auto-generate when pool is low.
   static const int otpReplenishBatchSize = 100;
 
+  /// Grace period for key expiry checks to tolerate device clock drift.
+  /// If a key appears expired by less than this amount, it's still treated
+  /// as valid. This prevents false expirations on devices with slightly
+  /// fast clocks.
+  static const Duration clockDriftGracePeriod = Duration(hours: 1);
+
   SignalProtocolManager({
     required CryptoSecureStorage secureStorage,
     SecurityEventBus? securityEventBus,
@@ -417,6 +423,29 @@ class SignalProtocolManager {
       );
     }
 
+    // ── Peer identity key change detection ───────────────────────
+    // If we previously stored a peer's identity key and it changed,
+    // this means the peer reinstalled, switched devices, or a MITM
+    // is presenting a different key. Emit event so the app can warn.
+    final previousPeerKey = await _cryptoStorage.getPeerIdentityKey(
+      recipientBundle.userId,
+      recipientBundle.deviceId,
+    );
+    if (previousPeerKey != null &&
+        previousPeerKey != recipientBundle.identityKey) {
+      _eventBus?.emitType(
+        SecurityEventType.peerIdentityKeyChanged,
+        sessionId: _sessionKey(
+          recipientBundle.userId,
+          recipientBundle.deviceId,
+        ),
+        metadata: {
+          'reason': 'Identity key differs from stored key. '
+              'Peer may have reinstalled or this may be a MITM attack.',
+        },
+      );
+    }
+
     final X3DHResult x3dhResult;
     try {
       x3dhResult = await X3DH.initiateKeyAgreement(
@@ -443,6 +472,13 @@ class SignalProtocolManager {
       recipientBundle.userId,
       recipientBundle.deviceId,
       x3dhResult.pqxdhUsed,
+    );
+
+    // Store the peer's identity key for future change detection
+    await _cryptoStorage.savePeerIdentityKey(
+      recipientBundle.userId,
+      recipientBundle.deviceId,
+      recipientBundle.identityKey,
     );
 
     CryptoDebugLogger.log(
@@ -1490,8 +1526,11 @@ class SignalProtocolManager {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
-      // Check absolute max lifetime — never use a key past this age
-      if ((now - createdAt) > absoluteMaxKeyLifetime.inMilliseconds) {
+      // Check absolute max lifetime — never use a key past this age.
+      // Grace period tolerates small clock drifts (e.g. device clock 30min ahead).
+      final maxWithGrace = absoluteMaxKeyLifetime.inMilliseconds +
+          clockDriftGracePeriod.inMilliseconds;
+      if ((now - createdAt) > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Signed pre-key exceeded absolute max lifetime — forcing rotation',
@@ -1597,8 +1636,10 @@ class SignalProtocolManager {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
-      // Check absolute max lifetime
-      if ((now - createdAt) > absoluteMaxKeyLifetime.inMilliseconds) {
+      // Check absolute max lifetime with clock drift grace period
+      final maxWithGrace = absoluteMaxKeyLifetime.inMilliseconds +
+          clockDriftGracePeriod.inMilliseconds;
+      if ((now - createdAt) > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Kyber key exceeded absolute max lifetime — forcing rotation',
@@ -1816,11 +1857,15 @@ class SignalProtocolManager {
     final now = DateTime.now().millisecondsSinceEpoch;
     var allFresh = true;
 
+    // Clock drift grace period for all expiry checks
+    final maxWithGrace = absoluteMaxKeyLifetime.inMilliseconds +
+        clockDriftGracePeriod.inMilliseconds;
+
     // Check signed pre-key age
     final spkCreatedAt = await _cryptoStorage.getSignedPreKeyCreatedAt();
     if (spkCreatedAt != null) {
       final age = now - spkCreatedAt;
-      if (age > absoluteMaxKeyLifetime.inMilliseconds) {
+      if (age > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Signed pre-key age ${age}ms exceeds '
@@ -1838,7 +1883,7 @@ class SignalProtocolManager {
     final kyberCreatedAt = await _cryptoStorage.getKyberCreatedAt();
     if (kyberCreatedAt != null) {
       final age = now - kyberCreatedAt;
-      if (age > absoluteMaxKeyLifetime.inMilliseconds) {
+      if (age > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Kyber key age ${age}ms exceeds '
@@ -2037,6 +2082,12 @@ class SignalProtocolManager {
           sessionId: groupId,
           metadata: {'source': 'sender_key', 'senderId': senderId},
         );
+      } else if (msg.contains('Too many skipped iterations')) {
+        _eventBus?.emitType(
+          SecurityEventType.skippedKeyCapReached,
+          sessionId: groupId,
+          metadata: {'source': 'sender_key', 'senderId': senderId},
+        );
       }
       rethrow;
     }
@@ -2127,6 +2178,11 @@ class SignalProtocolManager {
   }
 
   /// Check if the session pair has exceeded the reset rate limit.
+  ///
+  /// Includes backward-clock defense: if the current wall clock is before
+  /// the most recent recorded reset, the clock went backwards (NTP drift,
+  /// manual change, or deliberate attack). In that case we conservatively
+  /// keep the rate limit active to prevent bypass via clock manipulation.
   Future<bool> _isResetRateLimited(String userId, String deviceId) async {
     final timestamps = await _cryptoStorage.loadResetTimestamps(
       userId,
@@ -2135,14 +2191,26 @@ class SignalProtocolManager {
     if (timestamps.isEmpty) return false;
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    final windowStart = now - _resetWindow.inMilliseconds;
+    final lastReset = timestamps.last;
+
+    // Backward-clock defense: if now < lastReset, clock went backwards.
+    // Conservatively treat as rate-limited to prevent bypass.
+    if (now < lastReset) {
+      CryptoDebugLogger.log(
+        'RATE_LIMIT',
+        'Clock went backwards (now=$now < lastReset=$lastReset). '
+            'Keeping rate limit active.',
+      );
+      return true;
+    }
 
     // Check cooldown: if last reset was >24h ago, clear and allow
-    final lastReset = timestamps.last;
     if (now - lastReset > _resetCooldown.inMilliseconds) {
       await _cryptoStorage.clearResetTimestamps(userId, deviceId);
       return false;
     }
+
+    final windowStart = now - _resetWindow.inMilliseconds;
 
     // Count resets within the window
     final recentResets = timestamps.where((t) => t > windowStart).length;

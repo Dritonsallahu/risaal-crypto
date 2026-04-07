@@ -42,6 +42,13 @@ enum SecurityEventType {
   /// Pre-key replenishment is needed (OTP consumed during session setup).
   preKeyReplenishmentNeeded,
 
+  /// A peer's identity key changed (reinstall, new device, or MITM).
+  ///
+  /// Emitted when a session is created with a peer whose identity key differs
+  /// from the previously stored key. The host app MUST prompt users to
+  /// re-verify safety numbers.
+  peerIdentityKeyChanged,
+
   /// An anomaly pattern was detected (e.g. signature failure spike).
   ///
   /// Emitted by [SecurityAnomalyDetector] when event frequency exceeds

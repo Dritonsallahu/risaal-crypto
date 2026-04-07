@@ -216,6 +216,7 @@ void main() {
         SecurityEventType.keyExpired,
         SecurityEventType.resetRateLimitHit,
         SecurityEventType.anomalyDetected,
+        SecurityEventType.peerIdentityKeyChanged,
       ];
 
       for (final type in requiredTypes) {
