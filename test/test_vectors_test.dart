@@ -9,8 +9,6 @@ import 'package:risaal_crypto/src/message_padding.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/x3dh.dart';
 
-import 'helpers/fake_secure_storage.dart';
-
 void main() {
   // ── HKDF Test Vectors (RFC 5869) ─────────────────────────────────────
 
@@ -51,8 +49,7 @@ void main() {
     // Risaal uses HKDF with 32-byte output for X3DH (_deriveSecret) and
     // 64-byte output for Double Ratchet KDF_RK. These tests verify our
     // specific HKDF configurations produce deterministic, consistent output.
-    test(
-        'HKDF with Risaal X3DH parameters is deterministic (32-byte output)',
+    test('HKDF with Risaal X3DH parameters is deterministic (32-byte output)',
         () async {
       // Simulate X3DH: HKDF(dhConcat, "Risaal_X3DH", zero-salt)
       final ikm = List<int>.filled(32, 0xAB);
@@ -253,12 +250,11 @@ void main() {
   // ── X3DH Determinism Test ────────────────────────────────────────────
 
   group('X3DH deterministic session establishment', () {
-    test(
-        'two parties derive the same shared secret from the same key material',
+    test('two parties derive the same shared secret from the same key material',
         () async {
       // Generate fixed key material for Alice and Bob
       final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      final aliceSigningKP = await SignalKeyHelper.generateSigningKeyPair();
+      /* aliceSigningKP not needed — Alice is the initiator, not the responder */
 
       final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
       final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
@@ -467,8 +463,7 @@ void main() {
       }
     });
 
-    test(
-        'sender and receiver ratchets produce matching encrypt/decrypt cycle',
+    test('sender and receiver ratchets produce matching encrypt/decrypt cycle',
         () async {
       final sharedSecret = List<int>.filled(32, 0x77);
 
@@ -671,8 +666,7 @@ void main() {
       }
     });
 
-    test('unpad recovers exact original bytes for all bucket boundaries',
-        () {
+    test('unpad recovers exact original bytes for all bucket boundaries', () {
       final testLengths = [0, 1, 252, 253, 1020, 1021, 4092, 4093];
 
       for (final len in testLengths) {
@@ -700,8 +694,7 @@ void main() {
       expect(privBytes.length, equals(32));
     });
 
-    test('Ed25519 key pair has correct sizes (32 pub, 32 priv seed)',
-        () async {
+    test('Ed25519 key pair has correct sizes (32 pub, 32 priv seed)', () async {
       final kp = await SignalKeyHelper.generateSigningKeyPair();
       final pubBytes = base64Decode(kp.publicKey);
       final privBytes = base64Decode(kp.privateKey);

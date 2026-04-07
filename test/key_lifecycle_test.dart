@@ -111,9 +111,8 @@ void main() {
 
       // Get initial bundle to check keyId
       final initialBundle = await manager.generateKeyBundle();
-      final initialKeyId =
-          (initialBundle['signedPreKey'] as Map<String, dynamic>)['keyId']
-              as int;
+      final initialKeyId = (initialBundle['signedPreKey']
+          as Map<String, dynamic>)['keyId'] as int;
 
       // Force rotation
       final oldTimestamp = DateTime.now().millisecondsSinceEpoch -
@@ -124,9 +123,8 @@ void main() {
       );
 
       final rotatedBundle = await manager.rotateSignedPreKeyIfNeeded();
-      final newKeyId =
-          (rotatedBundle!['signedPreKey'] as Map<String, dynamic>)['keyId']
-              as int;
+      final newKeyId = (rotatedBundle!['signedPreKey']
+          as Map<String, dynamic>)['keyId'] as int;
 
       expect(newKeyId, equals(initialKeyId + 1));
     });
@@ -224,7 +222,8 @@ void main() {
   // ── onPreKeyExhaustionWarning callback ──────────────────────────────
 
   group('onPreKeyExhaustionWarning callback', () {
-    test('fires when OTP count drops below threshold during processPreKeyMessage',
+    test(
+        'fires when OTP count drops below threshold during processPreKeyMessage',
         () async {
       // Set up Alice and Bob
       final aliceStorage = FakeSecureStorage();
@@ -277,9 +276,9 @@ void main() {
       // Bob decrypts — this consumes an OTP and should check exhaustion
       await bob.decryptMessage('alice-id', 'alice-device', envelope);
 
-      // Bob had 20 OTPs, consumed 1 = 19 remaining. Default threshold is 10.
-      // 19 > 10, so warning should NOT fire
-      expect(warningCount, isNull);
+      // Bob had 20 OTPs, consumed 1 = 19 remaining. Default threshold is 25.
+      // 19 <= 25, so warning SHOULD fire
+      expect(warningCount, equals(19));
     });
 
     test('fires when OTP count is at threshold after consumption', () async {
@@ -328,12 +327,11 @@ void main() {
           await alice.encryptMessage('bob-id', 'bob-device', 'Hello!');
 
       // Bob decrypts — 20 - 1 = 19 OTPs remaining
-      // Default threshold is 10, but 19 > 10 so no warning
-      // However, the callback is still set — just won't fire at default threshold
+      // Default threshold is 25, so 19 <= 25 — warning fires
       await bob.decryptMessage('alice-id', 'alice-device', envelope);
 
-      // 19 remaining, default threshold 10 — should not fire
-      expect(warningCount, isNull);
+      // 19 remaining, default threshold 25 — should fire
+      expect(warningCount, equals(19));
 
       // Now verify it would fire if threshold were high enough
       // by checking the count directly

@@ -49,8 +49,7 @@ void main() {
   });
 
   group('Ed25519 sender authentication — anti-forgery', () {
-    test(
-        'Recipient CANNOT forge messages — no signing private key available',
+    test('Recipient CANNOT forge messages — no signing private key available',
         () async {
       final (managerAlice, _) = await _createManager('alice');
       final (managerBob, storeBob) = await _createManager('bob');
@@ -98,8 +97,7 @@ void main() {
       );
     });
 
-    test(
-        'Signature verification detects tampering — modified ciphertext fails',
+    test('Signature verification detects tampering — modified ciphertext fails',
         () async {
       final (managerAlice, _) = await _createManager('alice');
       final (managerBob, _) = await _createManager('bob');
@@ -263,8 +261,7 @@ void main() {
   });
 
   group('Ed25519 sender authentication — multi-member group', () {
-    test(
-        'Three members — each member\'s messages authenticated independently',
+    test('Three members — each member\'s messages authenticated independently',
         () async {
       final (managerAlice, _) = await _createManager('alice');
       final (managerBob, _) = await _createManager('bob');
@@ -365,8 +362,7 @@ void main() {
       );
     });
 
-    test(
-        'Each member has unique Ed25519 signing keys — distributions differ',
+    test('Each member has unique Ed25519 signing keys — distributions differ',
         () async {
       final (managerAlice, _) = await _createManager('alice');
       final (managerBob, _) = await _createManager('bob');
@@ -410,8 +406,7 @@ void main() {
 
       // Decrypt all in order — all signatures should verify
       for (var i = 0; i < 10; i++) {
-        final dec =
-            await managerBob.decrypt(groupId, 'alice', messages[i]);
+        final dec = await managerBob.decrypt(groupId, 'alice', messages[i]);
         expect(utf8.decode(dec), 'Message $i');
       }
     });
@@ -434,8 +429,8 @@ void main() {
           await managerAlice.encrypt(groupId, utf8.encode('Message 0'));
       final msg1 =
           await managerAlice.encrypt(groupId, utf8.encode('Message 1'));
-      final msg2 =
-          await managerAlice.encrypt(groupId, utf8.encode('Message 2'));
+      await managerAlice.encrypt(
+          groupId, utf8.encode('Message 2')); // msg2 — skipped by Bob
       final msg3 =
           await managerAlice.encrypt(groupId, utf8.encode('Message 3'));
       final msg4 =
@@ -527,7 +522,7 @@ void main() {
         'Bob cannot sign a message that verifies as Alice — asymmetric guarantee',
         () async {
       final (managerAlice, _) = await _createManager('alice');
-      final (_, storageBob) = await _createManager('bob');
+      final (_, _) = await _createManager('bob');
       const groupId = 'group-asym-001';
 
       final aliceDist = await managerAlice.generateSenderKey(groupId);
@@ -549,8 +544,7 @@ void main() {
         forgedSignature,
       );
       expect(isValid, isFalse,
-          reason:
-              'Bob\'s signature must NOT verify with Alice\'s public key — '
+          reason: 'Bob\'s signature must NOT verify with Alice\'s public key — '
               'this is the core asymmetric guarantee');
     });
   });

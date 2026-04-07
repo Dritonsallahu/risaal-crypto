@@ -30,16 +30,15 @@ PreKeyBundle _bundleFromMap(
     oneTimePreKey: oneTimePreKeys.isNotEmpty
         ? OneTimePreKeyPublic(
             keyId:
-                (oneTimePreKeys.first as Map<String, dynamic>)['keyId']
-                    as int,
+                (oneTimePreKeys.first as Map<String, dynamic>)['keyId'] as int,
             publicKey: (oneTimePreKeys.first
                 as Map<String, dynamic>)['publicKey'] as String,
           )
         : null,
     kyberPreKey: bundle.containsKey('kyberPreKey')
         ? KyberPreKeyPublic(
-            keyId: (bundle['kyberPreKey'] as Map<String, dynamic>)['keyId']
-                as int,
+            keyId:
+                (bundle['kyberPreKey'] as Map<String, dynamic>)['keyId'] as int,
             publicKey: (bundle['kyberPreKey']
                 as Map<String, dynamic>)['publicKey'] as String,
           )
@@ -47,12 +46,13 @@ PreKeyBundle _bundleFromMap(
   );
 }
 
-Future<({
-  SignalProtocolManager alice,
-  FakeSecureStorage aliceStorage,
-  SignalProtocolManager bob,
-  FakeSecureStorage bobStorage,
-})> _createFullSession() async {
+Future<
+    ({
+      SignalProtocolManager alice,
+      FakeSecureStorage aliceStorage,
+      SignalProtocolManager bob,
+      FakeSecureStorage bobStorage,
+    })> _createFullSession() async {
   final aliceStorage = FakeSecureStorage();
   final bobStorage = FakeSecureStorage();
   final alice = SignalProtocolManager(secureStorage: aliceStorage);
@@ -96,7 +96,6 @@ Future<({
 /// and rejected by the Signal Protocol implementation.
 void main() {
   group('Adversarial Crypto Tests', () {
-
     // ── Group 1: Double Ratchet Message Tampering ──────────────────────
 
     group('Double Ratchet Message Tampering', () {
@@ -201,7 +200,8 @@ void main() {
             'alice-device',
             tamperedEnvelope,
           ),
-          throwsA(anything), // Can throw various errors depending on DH/AES failure
+          throwsA(
+              anything), // Can throw various errors depending on DH/AES failure
         );
       });
 
@@ -248,7 +248,8 @@ void main() {
         final ciphertextB64 = message['ciphertext'] as String;
         final ciphertextBytes = base64Decode(ciphertextB64);
 
-        final truncated = ciphertextBytes.sublist(0, ciphertextBytes.length - 10);
+        final truncated =
+            ciphertextBytes.sublist(0, ciphertextBytes.length - 10);
         final truncatedCiphertext = base64Encode(truncated);
 
         final tamperedMessage = Map<String, dynamic>.from(message);
@@ -393,7 +394,7 @@ void main() {
         expect(p1, equals('message 1'));
       });
 
-      test('Skip beyond max (>100 messages) throws StateError', () async {
+      test('Skip beyond max (>2000 messages) throws StateError', () async {
         final session = await _createFullSession();
 
         // Encrypt one normal message
@@ -403,10 +404,10 @@ void main() {
           'message 0',
         );
 
-        // Tamper with the messageNumber to force >100 skipped keys
+        // Tamper with the messageNumber to force >2000 skipped keys
         final message = msg0['message'] as Map<String, dynamic>;
         final tamperedMessage = Map<String, dynamic>.from(message);
-        tamperedMessage['messageNumber'] = 150; // Force 150 skips
+        tamperedMessage['messageNumber'] = 2500; // Force 2500 skips
         final tamperedEnvelope = Map<String, dynamic>.from(msg0);
         tamperedEnvelope['message'] = tamperedMessage;
 

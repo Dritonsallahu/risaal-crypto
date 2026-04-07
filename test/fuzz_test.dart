@@ -11,8 +11,6 @@ import 'package:risaal_crypto/src/models/session_state.dart';
 import 'package:risaal_crypto/src/sender_key.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 import 'package:risaal_crypto/src/session_reset_errors.dart';
-import 'package:risaal_crypto/src/crypto_storage.dart';
-
 import 'helpers/fake_secure_storage.dart';
 
 /// Deterministic Random for reproducible fuzz tests.
@@ -84,8 +82,7 @@ void main() {
       await bobStorage.write(key: 'device_id', value: 'bob-device');
     });
 
-    test(
-        'random malformed envelopes never crash decryptMessage (100 inputs)',
+    test('random malformed envelopes never crash decryptMessage (100 inputs)',
         () async {
       for (var i = 0; i < 100; i++) {
         final envelope = _generateRandomEnvelope(i);
@@ -168,7 +165,10 @@ void main() {
       final envelopes = [
         {'type': 42, 'message': 'not a map'},
         {'type': 'message', 'message': 42},
-        {'type': 'message', 'message': <String, dynamic>{'dhPublicKey': 42}},
+        {
+          'type': 'message',
+          'message': <String, dynamic>{'dhPublicKey': 42}
+        },
         {
           'type': 'prekey',
           'senderIdentityKey': 123,
@@ -304,9 +304,7 @@ void main() {
       }
     });
 
-    test(
-        'DoubleRatchet.fromJson with truncated/mangled JSON throws',
-        () {
+    test('DoubleRatchet.fromJson with truncated/mangled JSON throws', () {
       final badInputs = [
         <String, dynamic>{},
         {'dhSendingKeyPair': 'not json'},
@@ -375,11 +373,13 @@ void main() {
           // May or may not succeed depending on the crypto library's validation
         } catch (e) {
           // StateError, ArgumentError, FormatException, etc. are all acceptable
-          expect(e, isNot(isA<Error>().having(
-            (e) => e.runtimeType.toString(),
-            'type',
-            contains('Segfault'),
-          )));
+          expect(
+              e,
+              isNot(isA<Error>().having(
+                (e) => e.runtimeType.toString(),
+                'type',
+                contains('Segfault'),
+              )));
         }
       }
     });
@@ -704,8 +704,7 @@ void main() {
       final distribution = await alice.generateGroupSenderKey(groupId);
       await bob.processGroupSenderKey(groupId, 'alice-id', distribution);
 
-      final ciphertext =
-          await alice.encryptGroupMessage(groupId, 'replay me');
+      final ciphertext = await alice.encryptGroupMessage(groupId, 'replay me');
 
       // First decrypt should succeed
       final plaintext =

@@ -22,12 +22,13 @@ class CryptoStorage {
   static const _keyOneTimePreKeys = 'crypto_one_time_pre_keys';
   static const _keySessionPrefix = 'crypto_session_';
   static const _keyKyberKP = 'crypto_kyber_key_pair';
+  static const _keyKyberCreatedAt = 'crypto_kyber_created_at';
   static const _keyNextPreKeyId = 'crypto_next_pre_key_id';
+  static const _keyPeerCapPrefix = 'crypto_peer_cap_';
 
   // ── Identity Key Pair ─────────────────────────────────────────────
 
-  Future<void> saveIdentityKeyPair(KeyPair keyPair) =>
-      _secureStorage.write(
+  Future<void> saveIdentityKeyPair(KeyPair keyPair) => _secureStorage.write(
         key: _keyIdentityKP,
         value: jsonEncode(keyPair.toJson()),
       );
@@ -40,8 +41,7 @@ class CryptoStorage {
 
   // ── Signing Key Pair (Ed25519) ──────────────────────────────────
 
-  Future<void> saveSigningKeyPair(KeyPair keyPair) =>
-      _secureStorage.write(
+  Future<void> saveSigningKeyPair(KeyPair keyPair) => _secureStorage.write(
         key: _keySigningKP,
         value: jsonEncode(keyPair.toJson()),
       );
@@ -54,8 +54,7 @@ class CryptoStorage {
 
   // ── Signed Pre-Key ────────────────────────────────────────────────
 
-  Future<void> saveSignedPreKey(SignedPreKey key) =>
-      _secureStorage.write(
+  Future<void> saveSignedPreKey(SignedPreKey key) => _secureStorage.write(
         key: _keySignedPreKey,
         value: jsonEncode(key.toJson()),
       );
@@ -68,8 +67,7 @@ class CryptoStorage {
 
   // ── Signed Pre-Key Creation Timestamp ────────────────────────────
 
-  Future<void> saveSignedPreKeyCreatedAt(int epochMs) =>
-      _secureStorage.write(
+  Future<void> saveSignedPreKeyCreatedAt(int epochMs) => _secureStorage.write(
         key: _keySignedPreKeyCreatedAt,
         value: epochMs.toString(),
       );
@@ -105,8 +103,7 @@ class CryptoStorage {
 
   // ── Kyber Key Pair (ML-KEM-768) ──────────────────────────────────
 
-  Future<void> saveKyberKeyPair(KyberKeyPair keyPair) =>
-      _secureStorage.write(
+  Future<void> saveKyberKeyPair(KyberKeyPair keyPair) => _secureStorage.write(
         key: _keyKyberKP,
         value: jsonEncode(keyPair.toJson()),
       );
@@ -116,6 +113,95 @@ class CryptoStorage {
     if (raw == null) return null;
     return KyberKeyPair.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
+
+  // ── Kyber Key Creation Timestamp ─────────────────────────────────
+
+  Future<void> saveKyberCreatedAt(int epochMs) => _secureStorage.write(
+        key: _keyKyberCreatedAt,
+        value: epochMs.toString(),
+      );
+
+  Future<int?> getKyberCreatedAt() async {
+    final raw = await _secureStorage.read(key: _keyKyberCreatedAt);
+    if (raw == null) return null;
+    return int.tryParse(raw);
+  }
+
+  // ── Peer Capability Tracking (anti-downgrade) ─────────────────────
+
+  String _peerCapKey(String userId, String deviceId) =>
+      '$_keyPeerCapPrefix${userId}_$deviceId';
+
+  /// Save the peer's known PQXDH capability.
+  Future<void> savePeerPqxdhCapability(
+    String userId,
+    String deviceId,
+    bool supportsPqxdh,
+  ) =>
+      _secureStorage.write(
+        key: _peerCapKey(userId, deviceId),
+        value: jsonEncode({
+          'supportsPqxdh': supportsPqxdh,
+          'lastSeen': DateTime.now().millisecondsSinceEpoch,
+        }),
+      );
+
+  /// Get the peer's last known PQXDH capability.
+  /// Returns null if we've never established a session with this peer.
+  Future<bool?> getPeerPqxdhCapability(
+    String userId,
+    String deviceId,
+  ) async {
+    final raw = await _secureStorage.read(
+      key: _peerCapKey(userId, deviceId),
+    );
+    if (raw == null) return null;
+    final json = jsonDecode(raw) as Map<String, dynamic>;
+    return json['supportsPqxdh'] as bool?;
+  }
+
+  /// Delete peer capability record (e.g. on session deletion).
+  Future<void> deletePeerCapability(String userId, String deviceId) =>
+      _secureStorage.delete(key: _peerCapKey(userId, deviceId));
+
+  // ── Anti-Replay State Persistence ──────────────────────────────────
+
+  static const _keyReplayPrefix = 'crypto_replay_';
+
+  String _replayKey(String userId, String deviceId) =>
+      '$_keyReplayPrefix${userId}_$deviceId';
+
+  /// Save the set of received message numbers for anti-replay.
+  /// Stores as JSON list of "dhKey:msgNum" strings.
+  Future<void> saveReceivedMessageNumbers(
+    String userId,
+    String deviceId,
+    Set<String> messageIds,
+  ) async {
+    // Only persist the most recent entries to bound storage size.
+    final list = messageIds.toList();
+    final trimmed =
+        list.length > 2000 ? list.sublist(list.length - 2000) : list;
+    await _secureStorage.write(
+      key: _replayKey(userId, deviceId),
+      value: jsonEncode(trimmed),
+    );
+  }
+
+  /// Load persisted received message numbers for anti-replay.
+  Future<Set<String>> loadReceivedMessageNumbers(
+    String userId,
+    String deviceId,
+  ) async {
+    final raw = await _secureStorage.read(key: _replayKey(userId, deviceId));
+    if (raw == null || raw.isEmpty) return {};
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.cast<String>().toSet();
+  }
+
+  /// Clear anti-replay state for a session (e.g. on session deletion).
+  Future<void> clearReceivedMessageNumbers(String userId, String deviceId) =>
+      _secureStorage.delete(key: _replayKey(userId, deviceId));
 
   // ── Session State ─────────────────────────────────────────────────
 
@@ -169,14 +255,12 @@ class CryptoStorage {
 
   // ── Session Device Tracking (for clearing all sessions for a user)
 
-  String _sessionDevicesKey(String userId) =>
-      'crypto_session_devices_$userId';
+  String _sessionDevicesKey(String userId) => 'crypto_session_devices_$userId';
 
   Future<void> trackSessionDevice(String userId, String deviceId) async {
     final key = _sessionDevicesKey(userId);
     final existing = await _secureStorage.read(key: key) ?? '';
-    final devices =
-        existing.isEmpty ? <String>{} : existing.split(',').toSet();
+    final devices = existing.isEmpty ? <String>{} : existing.split(',').toSet();
     devices.add(deviceId);
     await _secureStorage.write(key: key, value: devices.join(','));
   }

@@ -10,6 +10,7 @@ import 'models/signal_keys.dart';
 import 'safety_number.dart';
 import 'sealed_sender.dart';
 import 'sender_key.dart';
+import 'security_event_bus.dart';
 import 'session_reset_errors.dart';
 import 'x3dh.dart';
 
@@ -78,6 +79,13 @@ class SealedSenderResult {
 class SignalProtocolManager {
   final CryptoStorage _cryptoStorage;
 
+  /// Stream-based security event bus for observability.
+  ///
+  /// If provided, security-relevant events (session resets, key rotations,
+  /// exhaustion warnings, etc.) are emitted here. The host app can subscribe
+  /// via `bus.events.listen(...)` to drive UI or telemetry.
+  final SecurityEventBus? _eventBus;
+
   /// In-memory session cache: "recipientId:deviceId" → DoubleRatchet.
   final Map<String, DoubleRatchet> _sessions = {};
 
@@ -111,8 +119,18 @@ class SignalProtocolManager {
   /// Default signed pre-key rotation interval: 7 days.
   static const Duration defaultSignedPreKeyMaxAge = Duration(days: 7);
 
-  SignalProtocolManager({required CryptoSecureStorage secureStorage})
-    : _cryptoStorage = CryptoStorage(secureStorage: secureStorage) {
+  /// Default Kyber key rotation interval: 7 days (alongside signed pre-key).
+  static const Duration defaultKyberKeyMaxAge = Duration(days: 7);
+
+  /// Default OTP low-watermark threshold. When the pool drops to or below
+  /// this count, [SecurityEventType.otpPoolLow] is emitted.
+  static const int defaultOtpLowWatermark = 25;
+
+  SignalProtocolManager({
+    required CryptoSecureStorage secureStorage,
+    SecurityEventBus? securityEventBus,
+  })  : _cryptoStorage = CryptoStorage(secureStorage: secureStorage),
+        _eventBus = securityEventBus {
     _senderKeyManager = SenderKeyManager(cryptoStorage: _cryptoStorage);
   }
 
@@ -205,6 +223,9 @@ class SignalProtocolManager {
     try {
       final kyberKP = SignalKeyHelper.generateKyberKeyPair();
       await _cryptoStorage.saveKyberKeyPair(kyberKP);
+      await _cryptoStorage.saveKyberCreatedAt(
+        DateTime.now().millisecondsSinceEpoch,
+      );
       CryptoDebugLogger.logKeyInfo(
         'INIT',
         'Generated Kyber-768 public key',
@@ -349,16 +370,54 @@ class SignalProtocolManager {
 
     final identityKP = await _requireIdentityKeyPair();
 
+    // ── Anti-downgrade check ──────────────────────────────────────
+    // If we previously established a PQXDH session with this peer but
+    // their new bundle lacks a Kyber key, that's a potential downgrade
+    // attack (MITM stripping the post-quantum layer).
+    final bundleHasPqxdh = recipientBundle.kyberPreKey != null;
+    final previousCap = await _cryptoStorage.getPeerPqxdhCapability(
+      recipientBundle.userId,
+      recipientBundle.deviceId,
+    );
+    if (previousCap == true &&
+        !bundleHasPqxdh &&
+        pqxdhPolicy != PqxdhPolicy.classicalOnly) {
+      CryptoDebugLogger.log(
+        'X3DH',
+        'WARNING: Anti-downgrade — peer previously supported PQXDH '
+            'but new bundle has no Kyber key',
+      );
+      _eventBus?.emitType(
+        SecurityEventType.antiDowngradeTriggered,
+        sessionId: _sessionKey(
+          recipientBundle.userId,
+          recipientBundle.deviceId,
+        ),
+        metadata: {
+          'previousPqxdh': true,
+          'currentPqxdh': false,
+          'reason': 'Peer Kyber key missing from new bundle',
+        },
+      );
+    }
+
     final x3dhResult = await X3DH.initiateKeyAgreement(
       identityKeyPair: identityKP,
       recipientBundle: recipientBundle,
       pqxdhPolicy: pqxdhPolicy,
     );
 
+    // Record peer's current PQXDH capability for future downgrade checks
+    await _cryptoStorage.savePeerPqxdhCapability(
+      recipientBundle.userId,
+      recipientBundle.deviceId,
+      x3dhResult.pqxdhUsed,
+    );
+
     CryptoDebugLogger.log(
       'X3DH',
       'Shared secret derived: ${x3dhResult.sharedSecret.length} bytes '
-      '(pqxdhUsed=${x3dhResult.pqxdhUsed})',
+          '(pqxdhUsed=${x3dhResult.pqxdhUsed})',
     );
     CryptoDebugLogger.logKeyInfo(
       'X3DH',
@@ -497,9 +556,8 @@ class SignalProtocolManager {
         'X3DH',
         'Available OTP keys: ${allOTPKs.map((k) => k.keyId).toList()}',
       );
-      oneTimePreKey = allOTPKs
-          .where((k) => k.keyId == usedOneTimePreKeyId)
-          .firstOrNull;
+      oneTimePreKey =
+          allOTPKs.where((k) => k.keyId == usedOneTimePreKeyId).firstOrNull;
       CryptoDebugLogger.log(
         'X3DH',
         'OTP key $usedOneTimePreKeyId: ${oneTimePreKey != null ? "FOUND" : "NOT FOUND"}',
@@ -532,6 +590,13 @@ class SignalProtocolManager {
     CryptoDebugLogger.log(
       'X3DH',
       'Shared secret derived (responder${kyberKP != null ? ", PQXDH" : ""}): ${sharedSecret.length} bytes',
+    );
+
+    // Record peer's PQXDH capability (whether they sent Kyber ciphertext)
+    await _cryptoStorage.savePeerPqxdhCapability(
+      senderId,
+      senderDeviceId,
+      kyberCiphertext != null && kyberKP != null,
     );
 
     // Remove the consumed one-time pre-key
@@ -782,6 +847,17 @@ class SignalProtocolManager {
           'DECRYPT_MSG',
           'Session UNSTABLE — $count resets in window, blocking auto-reset',
         );
+        final sid = _sessionKey(senderId, senderDeviceId);
+        _eventBus?.emitType(
+          SecurityEventType.resetRateLimitHit,
+          sessionId: sid,
+          metadata: {'resetCount': count},
+        );
+        _eventBus?.emitType(
+          SecurityEventType.sessionUnstable,
+          sessionId: sid,
+          metadata: {'resetCount': count},
+        );
         throw SessionUnstableError(
           senderId: senderId,
           senderDeviceId: senderDeviceId,
@@ -797,8 +873,15 @@ class SignalProtocolManager {
         'Broken session deleted — recorded reset event',
       );
 
+      _eventBus?.emitType(
+        SecurityEventType.sessionReset,
+        sessionId: _sessionKey(senderId, senderDeviceId),
+        metadata: {'originalError': e.toString()},
+      );
+
       // Trigger pre-key replenishment check — session reset consumes an OTP
       _onPreKeyReplenishmentNeeded?.call();
+      _eventBus?.emitType(SecurityEventType.preKeyReplenishmentNeeded);
 
       // If this IS a PreKey message, try re-establishing immediately
       if (type == 'prekey') {
@@ -916,6 +999,7 @@ class SignalProtocolManager {
     await _cryptoStorage.deleteSession(userId, deviceId);
     await _cryptoStorage.deleteSessionIdentityKey(userId, deviceId);
     await _cryptoStorage.clearPendingPreKeyInfo(userId, deviceId);
+    await _cryptoStorage.clearReceivedMessageNumbers(userId, deviceId);
     CryptoDebugLogger.log('SESSION', 'Removed session $userId:$deviceId');
   }
 
@@ -1064,8 +1148,12 @@ class SignalProtocolManager {
     // Read sender info from storage for the sealed envelope
     final senderId = await _cryptoStorage.readRaw('user_id');
     final senderDeviceId = await _cryptoStorage.readRaw('device_id');
-    if (senderId == null || senderId.isEmpty || senderDeviceId == null || senderDeviceId.isEmpty) {
-      throw StateError('Missing user_id or device_id for sealed sender envelope');
+    if (senderId == null ||
+        senderId.isEmpty ||
+        senderDeviceId == null ||
+        senderDeviceId.isEmpty) {
+      throw StateError(
+          'Missing user_id or device_id for sealed sender envelope');
     }
     CryptoDebugLogger.log(
       'SEAL',
@@ -1368,7 +1456,81 @@ class SignalProtocolManager {
       newSignedPreKey.keyPair.publicKey,
     );
 
+    _eventBus?.emitType(
+      SecurityEventType.keyRotationCompleted,
+      metadata: {'keyType': 'signedPreKey', 'keyId': newKeyId},
+    );
+
     return generateKeyBundle();
+  }
+
+  /// Rotate the Kyber (ML-KEM-768) key if it is older than [maxAge].
+  ///
+  /// Similar to [rotateSignedPreKeyIfNeeded], checks the stored creation
+  /// timestamp and generates a new Kyber key pair if the current one exceeds
+  /// [maxAge] (default 7 days).
+  ///
+  /// Returns `true` if rotation occurred, `false` if the key is still fresh
+  /// or if Kyber is not available on this platform.
+  Future<bool> rotateKyberKeyIfNeeded({
+    Duration maxAge = const Duration(days: 7),
+  }) async {
+    final createdAt = await _cryptoStorage.getKyberCreatedAt();
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
+      return false; // Still fresh
+    }
+
+    CryptoDebugLogger.log('KEY_LIFECYCLE', '═══ Rotating Kyber key ═══');
+
+    try {
+      final kyberKP = SignalKeyHelper.generateKyberKeyPair();
+      await _cryptoStorage.saveKyberKeyPair(kyberKP);
+      await _cryptoStorage.saveKyberCreatedAt(now);
+
+      CryptoDebugLogger.logKeyInfo(
+        'KEY_LIFECYCLE',
+        'Rotated Kyber-768 public key',
+        kyberKP.publicKey,
+      );
+
+      _eventBus?.emitType(
+        SecurityEventType.keyRotationCompleted,
+        metadata: {'keyType': 'kyber'},
+      );
+
+      return true;
+    } catch (e) {
+      CryptoDebugLogger.logError(
+        'KEY_LIFECYCLE',
+        'Kyber rotation failed — post-quantum unavailable',
+        e,
+      );
+      return false;
+    }
+  }
+
+  /// Rotate all keys that have exceeded their max age.
+  ///
+  /// Convenience method that checks and rotates both the signed pre-key
+  /// and the Kyber key in one call. Returns the updated key bundle if
+  /// any rotation occurred, or `null` if all keys are fresh.
+  ///
+  /// Call this periodically (e.g. on app foreground) to ensure key hygiene.
+  Future<Map<String, dynamic>?> rotateKeysIfNeeded({
+    Duration signedPreKeyMaxAge = const Duration(days: 7),
+    Duration kyberKeyMaxAge = const Duration(days: 7),
+  }) async {
+    final spkBundle = await rotateSignedPreKeyIfNeeded(
+      maxAge: signedPreKeyMaxAge,
+    );
+    final kyberRotated = await rotateKyberKeyIfNeeded(maxAge: kyberKeyMaxAge);
+
+    // If either rotated, return a fresh bundle for server upload
+    if (spkBundle != null) return spkBundle;
+    if (kyberRotated) return generateKeyBundle();
+    return null;
   }
 
   /// Return the number of one-time pre-keys currently stored locally.
@@ -1386,15 +1548,28 @@ class SignalProtocolManager {
     return count <= threshold;
   }
 
-  /// Check OTP exhaustion and fire the warning callback if needed.
+  /// Check OTP exhaustion and fire the warning callback / event if needed.
   ///
   /// Called internally after operations that consume OTPs (e.g.
-  /// [processPreKeyMessage]).
-  Future<void> _checkPreKeyExhaustion({int threshold = 10}) async {
-    if (_onPreKeyExhaustionWarning == null) return;
+  /// [processPreKeyMessage]). Uses [defaultOtpLowWatermark] as threshold.
+  Future<void> _checkPreKeyExhaustion() async {
     final count = await oneTimePreKeyCount();
-    if (count <= threshold) {
-      _onPreKeyExhaustionWarning!(count);
+    if (count <= defaultOtpLowWatermark) {
+      _onPreKeyExhaustionWarning?.call(count);
+      if (count == 0) {
+        _eventBus?.emitType(
+          SecurityEventType.otpPoolExhausted,
+          metadata: {'remaining': 0},
+        );
+      } else {
+        _eventBus?.emitType(
+          SecurityEventType.otpPoolLow,
+          metadata: {
+            'remaining': count,
+            'threshold': defaultOtpLowWatermark,
+          },
+        );
+      }
     }
   }
 

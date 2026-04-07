@@ -84,6 +84,15 @@ class RatchetState {
   /// Limited to 100 entries to prevent DoS attacks that force unbounded storage.
   Map<String, String> skippedKeys;
 
+  /// Set of received message identifiers ("dhPublicKey:messageNumber")
+  /// for explicit anti-replay protection. Persisted across app restarts.
+  ///
+  /// When a message is successfully decrypted, its identifier is added
+  /// here. If the same identifier arrives again, decryption is rejected
+  /// as a replay. Capped at [DoubleRatchet.maxReceivedTracked] entries,
+  /// pruning oldest when exceeded.
+  Set<String> receivedMessages;
+
   RatchetState({
     required this.dhSendingKeyPair,
     required this.dhReceivingKey,
@@ -94,7 +103,9 @@ class RatchetState {
     this.receiveMessageNumber = 0,
     this.previousChainLength = 0,
     Map<String, String>? skippedKeys,
-  }) : skippedKeys = skippedKeys ?? {};
+    Set<String>? receivedMessages,
+  })  : skippedKeys = skippedKeys ?? {},
+        receivedMessages = receivedMessages ?? {};
 
   Map<String, dynamic> toJson() => {
         'dhSendingKeyPair': dhSendingKeyPair,
@@ -106,6 +117,7 @@ class RatchetState {
         'receiveMessageNumber': receiveMessageNumber,
         'previousChainLength': previousChainLength,
         'skippedKeys': skippedKeys,
+        'receivedMessages': receivedMessages.toList(),
       };
 
   factory RatchetState.fromJson(Map<String, dynamic> json) => RatchetState(
@@ -119,6 +131,10 @@ class RatchetState {
         previousChainLength: json['previousChainLength'] as int,
         skippedKeys: (json['skippedKeys'] as Map<String, dynamic>?)
                 ?.map((k, v) => MapEntry(k, v as String)) ??
+            {},
+        receivedMessages: (json['receivedMessages'] as List<dynamic>?)
+                ?.cast<String>()
+                .toSet() ??
             {},
       );
 
@@ -143,6 +159,7 @@ class RatchetState {
     sendingChainKey = '';
     receivingChainKey = '';
     skippedKeys.clear();
+    receivedMessages.clear();
     sendMessageNumber = 0;
     receiveMessageNumber = 0;
     previousChainLength = 0;

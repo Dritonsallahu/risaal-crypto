@@ -82,11 +82,16 @@ class EncryptedMessage {
     final ct = json['ciphertext'] as String?;
     final nonce = json['nonce'] as String?;
 
-    if (dhKey == null || dhKey.isEmpty) throw const FormatException('Missing dhPublicKey');
-    if (msgNum == null || msgNum < 0) throw const FormatException('Invalid messageNumber');
-    if (prevLen == null || prevLen < 0) throw const FormatException('Invalid previousChainLength');
-    if (ct == null || ct.isEmpty) throw const FormatException('Missing ciphertext');
-    if (nonce == null || nonce.isEmpty) throw const FormatException('Missing nonce');
+    if (dhKey == null || dhKey.isEmpty)
+      throw const FormatException('Missing dhPublicKey');
+    if (msgNum == null || msgNum < 0)
+      throw const FormatException('Invalid messageNumber');
+    if (prevLen == null || prevLen < 0)
+      throw const FormatException('Invalid previousChainLength');
+    if (ct == null || ct.isEmpty)
+      throw const FormatException('Missing ciphertext');
+    if (nonce == null || nonce.isEmpty)
+      throw const FormatException('Missing nonce');
 
     return EncryptedMessage(
       dhPublicKey: dhKey,
@@ -132,7 +137,10 @@ class DoubleRatchet {
   ///
   /// If an attacker sends message number 10000 when we're at message 5, we'd
   /// try to store 9995 skipped keys. This limit prevents unbounded memory usage.
-  static const _maxSkippedKeys = 100;
+  static const _maxSkippedKeys = 2000;
+
+  /// Maximum number of received message IDs to track for anti-replay.
+  static const maxReceivedTracked = 2000;
   static const _ratchetInfo = 'Risaal_Ratchet';
 
   static final _x25519 = X25519();
@@ -317,26 +325,42 @@ class DoubleRatchet {
   }
 
   Future<List<int>> _decryptInner(EncryptedMessage message) async {
-    CryptoDebugLogger.log('RATCHET_D', 'decrypt: msgNum=${message.messageNumber} prevChain=${message.previousChainLength}');
-    CryptoDebugLogger.log('RATCHET_D', 'state: sendN=${_state.sendMessageNumber} recvN=${_state.receiveMessageNumber} skipped=${_state.skippedKeys.length}');
+    CryptoDebugLogger.log('RATCHET_D',
+        'decrypt: msgNum=${message.messageNumber} prevChain=${message.previousChainLength}');
+    CryptoDebugLogger.log('RATCHET_D',
+        'state: sendN=${_state.sendMessageNumber} recvN=${_state.receiveMessageNumber} skipped=${_state.skippedKeys.length}');
+
+    // ── Anti-replay check ─────────────────────────────────────────
+    final messageId = '${message.dhPublicKey}:${message.messageNumber}';
+    if (_state.receivedMessages.contains(messageId)) {
+      CryptoDebugLogger.log('RATCHET_D', 'REPLAY REJECTED: $messageId');
+      throw StateError(
+        'Replay attack detected: message $messageId already received',
+      );
+    }
 
     // Check skipped keys first
     final skipKey = '${message.dhPublicKey}:${message.messageNumber}';
     if (_state.skippedKeys.containsKey(skipKey)) {
-      CryptoDebugLogger.log('RATCHET_D', 'Found in SKIPPED KEYS — decrypting with stored key');
+      CryptoDebugLogger.log(
+          'RATCHET_D', 'Found in SKIPPED KEYS — decrypting with stored key');
       final messageKey = base64Decode(_state.skippedKeys[skipKey]!);
       _state.skippedKeys.remove(skipKey);
-      return _decryptWithKey(messageKey, message);
+      final result = await _decryptWithKey(messageKey, message);
+      _recordReceivedMessage(messageId);
+      return result;
     }
 
     // If the DH ratchet key changed, perform a DH ratchet step
     final dhKeyChanged = message.dhPublicKey != _state.dhReceivingKey;
-    CryptoDebugLogger.log('RATCHET_D', 'DH key changed: $dhKeyChanged (msg=${message.dhPublicKey.substring(0, 8)}... state=${_state.dhReceivingKey.isEmpty ? "(empty)" : "${_state.dhReceivingKey.substring(0, 8)}..."})');
+    CryptoDebugLogger.log('RATCHET_D',
+        'DH key changed: $dhKeyChanged (msg=${message.dhPublicKey.substring(0, 8)}... state=${_state.dhReceivingKey.isEmpty ? "(empty)" : "${_state.dhReceivingKey.substring(0, 8)}..."})');
 
     if (dhKeyChanged) {
       // Skip any remaining messages in the old receiving chain
       if (_state.receivingChainKey.isNotEmpty) {
-        CryptoDebugLogger.log('RATCHET_D', 'Skipping old chain messages up to ${message.previousChainLength}');
+        CryptoDebugLogger.log('RATCHET_D',
+            'Skipping old chain messages up to ${message.previousChainLength}');
         await _skipMessageKeys(
           _state.dhReceivingKey,
           message.previousChainLength,
@@ -346,12 +370,14 @@ class DoubleRatchet {
       // DH ratchet step
       CryptoDebugLogger.log('RATCHET_D', 'Performing DH ratchet step');
       await _dhRatchetStep(message.dhPublicKey);
-      CryptoDebugLogger.log('RATCHET_D', 'DH ratchet step complete. recvN=${_state.receiveMessageNumber} sendN=${_state.sendMessageNumber}');
+      CryptoDebugLogger.log('RATCHET_D',
+          'DH ratchet step complete. recvN=${_state.receiveMessageNumber} sendN=${_state.sendMessageNumber}');
     }
 
     // Skip ahead to the correct message number in the receiving chain
     if (message.messageNumber > _state.receiveMessageNumber) {
-      CryptoDebugLogger.log('RATCHET_D', 'Skipping ahead from recvN=${_state.receiveMessageNumber} to msgNum=${message.messageNumber}');
+      CryptoDebugLogger.log('RATCHET_D',
+          'Skipping ahead from recvN=${_state.receiveMessageNumber} to msgNum=${message.messageNumber}');
     }
     await _skipMessageKeys(
       _state.dhReceivingKey,
@@ -359,7 +385,8 @@ class DoubleRatchet {
     );
 
     // Derive the message key
-    CryptoDebugLogger.log('RATCHET_D', 'Deriving message key at recvN=${_state.receiveMessageNumber}');
+    CryptoDebugLogger.log('RATCHET_D',
+        'Deriving message key at recvN=${_state.receiveMessageNumber}');
     final chainKey = base64Decode(_state.receivingChainKey);
     final (newChainKey, messageKey) = await _kdfCK(chainKey);
     _state.receivingChainKey = base64Encode(newChainKey);
@@ -369,8 +396,23 @@ class DoubleRatchet {
     SecureMemory.zeroBytes(chainKey);
     SecureMemory.zeroBytes(newChainKey);
 
-    CryptoDebugLogger.log('RATCHET_D', 'Decrypting with derived key. New recvN=${_state.receiveMessageNumber}');
-    return _decryptWithKey(messageKey, message);
+    CryptoDebugLogger.log('RATCHET_D',
+        'Decrypting with derived key. New recvN=${_state.receiveMessageNumber}');
+    final result = await _decryptWithKey(messageKey, message);
+    _recordReceivedMessage(messageId);
+    return result;
+  }
+
+  /// Record a successfully-decrypted message for anti-replay.
+  /// Caps the set at [maxReceivedTracked] to prevent unbounded growth.
+  void _recordReceivedMessage(String messageId) {
+    _state.receivedMessages.add(messageId);
+    if (_state.receivedMessages.length > maxReceivedTracked) {
+      // Remove oldest entries (set has no ordering, so convert to list)
+      final list = _state.receivedMessages.toList();
+      _state.receivedMessages =
+          list.sublist(list.length - maxReceivedTracked).toSet();
+    }
   }
 
   // ── State Serialisation ───────────────────────────────────────────
@@ -413,8 +455,7 @@ class DoubleRatchet {
     _state.dhSendingKeyPair = jsonEncode(newSendingKP.toJson());
 
     final dhOutput2 = await _performDH(newSendingKP, newRemotePublicKey);
-    final (newRootKey2, sendChainKey) =
-        await _kdfRK(newRootKey1, dhOutput2);
+    final (newRootKey2, sendChainKey) = await _kdfRK(newRootKey1, dhOutput2);
     _state.rootKey = base64Encode(newRootKey2);
     _state.sendingChainKey = base64Encode(sendChainKey);
 

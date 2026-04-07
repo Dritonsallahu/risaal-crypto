@@ -68,6 +68,7 @@ export 'src/message_padding.dart';
 export 'src/stego_service.dart';
 export 'src/secure_memory.dart';
 export 'src/session_reset_errors.dart';
+export 'src/security_event_bus.dart';
 
 // ── Debug (stripped in release builds) ──────────────────────────────────
 // CryptoDebugLogger: Verbose logging for development (removed in --release builds).

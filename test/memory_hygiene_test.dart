@@ -115,7 +115,8 @@ void main() {
   // ── Double Ratchet DH shared secret zeroing ─────────────────────────
 
   group('Double Ratchet memory hygiene', () {
-    test('encrypt/decrypt completes without error (DH intermediaries zeroed internally)',
+    test(
+        'encrypt/decrypt completes without error (DH intermediaries zeroed internally)',
         () async {
       final (alice, bob) = await _createRatchetSession();
 
@@ -204,8 +205,7 @@ void main() {
     test('encrypt/decrypt zeroes chain key intermediaries', () async {
       final storage = FakeSecureStorage();
       final cryptoStorage = CryptoStorage(secureStorage: storage);
-      final senderKeyManager =
-          SenderKeyManager(cryptoStorage: cryptoStorage);
+      final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
 
       await storage.write(key: 'user_id', value: 'alice-id');
 
@@ -242,8 +242,7 @@ void main() {
         () async {
       final storage = FakeSecureStorage();
       final cryptoStorage = CryptoStorage(secureStorage: storage);
-      final senderKeyManager =
-          SenderKeyManager(cryptoStorage: cryptoStorage);
+      final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
 
       await storage.write(key: 'user_id', value: 'alice-id');
 
@@ -276,8 +275,7 @@ void main() {
     test('skipped iteration fast-forward exercises zeroing', () async {
       final storage = FakeSecureStorage();
       final cryptoStorage = CryptoStorage(secureStorage: storage);
-      final senderKeyManager =
-          SenderKeyManager(cryptoStorage: cryptoStorage);
+      final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
 
       await storage.write(key: 'user_id', value: 'alice-id');
 
@@ -300,7 +298,7 @@ void main() {
       final msg3 = utf8.encode('Third');
 
       final enc1 = await senderKeyManager.encrypt('group-3', msg1);
-      final enc2 = await senderKeyManager.encrypt('group-3', msg2);
+      await senderKeyManager.encrypt('group-3', msg2); // enc2 — skipped by Bob
       final enc3 = await senderKeyManager.encrypt('group-3', msg3);
 
       // Bob receives only the 3rd message first — fast-forwards 2 iterations

@@ -1,1 +1,30 @@
 include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    unused_import: warning
+    unused_local_variable: warning
+    dead_code: warning
+    missing_return: error
+    invalid_annotation_target: ignore
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+
+linter:
+  rules:
+    # Security-critical rules
+    avoid_print: true
+    no_leading_underscores_for_local_identifiers: true
+    prefer_final_locals: true
+    unnecessary_nullable_for_final_variable_declarations: true
+
+    # Code quality
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    prefer_single_quotes: true
+    sort_constructors_first: true
+    unawaited_futures: true
+    unnecessary_lambdas: true
+    unnecessary_this: true
+    use_key_in_widget_constructors: true
