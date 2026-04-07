@@ -1,0 +1,5 @@
+# Retry flaky crypto tests once. The `cryptography` package's pure-Dart
+# algorithm implementations have non-deterministic async scheduling that
+# occasionally causes SecretBoxAuthenticationError under test load.
+# A single retry resolves this without masking real failures.
+retry: 1

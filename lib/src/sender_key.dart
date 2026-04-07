@@ -574,7 +574,7 @@ class SenderKeyManager {
   static Future<List<int>> _deriveNextChainKey(List<int> chainKey) async {
     final mac = await _hmac.calculateMac([
       0x01,
-    ], secretKey: SecretKey(chainKey));
+    ], secretKey: SecretKey(List<int>.from(chainKey)));
     return mac.bytes;
   }
 
@@ -582,7 +582,7 @@ class SenderKeyManager {
   static Future<List<int>> _deriveMessageKey(List<int> chainKey) async {
     final mac = await _hmac.calculateMac([
       0x02,
-    ], secretKey: SecretKey(chainKey));
+    ], secretKey: SecretKey(List<int>.from(chainKey)));
     return mac.bytes;
   }
 
@@ -595,7 +595,7 @@ class SenderKeyManager {
     List<int> iv,
   ) async {
     final algorithm = AesCbc.with256bits(macAlgorithm: MacAlgorithm.empty);
-    final secretKey = SecretKey(key);
+    final secretKey = SecretKey(List<int>.from(key));
     // Pad plaintext to AES block size (PKCS7)
     final padded = _pkcs7Pad(plaintext, 16);
     final secretBox = await algorithm.encrypt(
@@ -613,7 +613,7 @@ class SenderKeyManager {
     List<int> iv,
   ) async {
     final algorithm = AesCbc.with256bits(macAlgorithm: MacAlgorithm.empty);
-    final secretKey = SecretKey(key);
+    final secretKey = SecretKey(List<int>.from(key));
     final secretBox = SecretBox(ciphertext, nonce: iv, mac: Mac.empty);
     final padded = await algorithm.decrypt(secretBox, secretKey: secretKey);
     return _pkcs7Unpad(padded);

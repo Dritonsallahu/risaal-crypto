@@ -56,31 +56,33 @@ import 'dart:typed_data';
 class SecureMemory {
   SecureMemory._();
 
-  static final _lib = _loadLibrary();
+  static final DynamicLibrary? _lib = _loadLibrary();
 
-  static DynamicLibrary _loadLibrary() {
-    if (Platform.isAndroid) {
-      return DynamicLibrary.open('librisaal_security.so');
-    } else if (Platform.isIOS) {
-      // On iOS, C symbols compiled into the Runner target are in the process.
-      return DynamicLibrary.process();
+  static DynamicLibrary? _loadLibrary() {
+    try {
+      if (Platform.isAndroid) {
+        return DynamicLibrary.open('librisaal_security.so');
+      } else if (Platform.isIOS) {
+        // On iOS, C symbols compiled into the Runner target are in the process.
+        return DynamicLibrary.process();
+      }
+    } catch (_) {
+      // Library not found or unsupported platform
     }
-    throw UnsupportedError(
-      'SecureMemory is only supported on Android and iOS',
-    );
+    return null;
   }
 
   // ── Native function signatures ────────────────────────────────────
 
-  static final _secureWipe = _lib.lookupFunction<
+  static final _secureWipe = _lib?.lookupFunction<
       Void Function(Pointer<Uint8>, Int64),
       void Function(Pointer<Uint8>, int)>('risaal_secure_wipe');
 
-  static final _secureAlloc = _lib.lookupFunction<
+  static final _secureAlloc = _lib?.lookupFunction<
       Pointer<Uint8> Function(Int64),
       Pointer<Uint8> Function(int)>('risaal_secure_alloc');
 
-  static final _secureFree = _lib.lookupFunction<
+  static final _secureFree = _lib?.lookupFunction<
       Void Function(Pointer<Uint8>, Int64),
       void Function(Pointer<Uint8>, int)>('risaal_secure_free');
 
@@ -115,19 +117,16 @@ class SecureMemory {
   static void zeroBytes(List<int> bytes) {
     if (bytes.isEmpty) return;
 
-    try {
-      // Allocate native buffer, copy bytes in, wipe both
-      final ptr = _secureAlloc(bytes.length);
-      if (ptr == nullptr) {
-        _fallbackZero(bytes);
-        return;
-      }
+    final alloc = _secureAlloc;
+    final wipe = _secureWipe;
+    final free = _secureFree;
 
-      // Wipe the native buffer (in case alloc didn't zero properly)
-      _secureWipe(ptr, bytes.length);
-      _secureFree(ptr, bytes.length);
-    } catch (_) {
-      // FFI not available — use fallback
+    if (alloc != null && wipe != null && free != null) {
+      final ptr = alloc(bytes.length);
+      if (ptr != nullptr) {
+        wipe(ptr, bytes.length);
+        free(ptr, bytes.length);
+      }
     }
 
     // Always zero the Dart-side list
@@ -138,23 +137,22 @@ class SecureMemory {
   static void zeroUint8List(Uint8List bytes) {
     if (bytes.isEmpty) return;
 
-    try {
-      // For Uint8List backed by a TypedData buffer, we can get a pointer
-      // to the underlying data and wipe it directly.
-      final ptr = _secureAlloc(bytes.length);
+    final alloc = _secureAlloc;
+    final wipe = _secureWipe;
+    final free = _secureFree;
+
+    if (alloc != null && wipe != null && free != null) {
+      final ptr = alloc(bytes.length);
       if (ptr != nullptr) {
-        // Copy to native, wipe native, free
         for (int i = 0; i < bytes.length; i++) {
           ptr[i] = bytes[i];
         }
-        _secureWipe(ptr, bytes.length);
-        _secureFree(ptr, bytes.length);
+        wipe(ptr, bytes.length);
+        free(ptr, bytes.length);
       }
-    } catch (_) {
-      // FFI not available
     }
 
-    // Zero the Dart buffer
+    // Always zero the Dart-side buffer
     for (int i = 0; i < bytes.length; i++) {
       bytes[i] = 0;
     }
@@ -187,13 +185,11 @@ class SecureMemory {
   /// ```
   static SecureBuffer? allocSecure(int length) {
     if (length <= 0) return null;
-    try {
-      final ptr = _secureAlloc(length);
-      if (ptr == nullptr) return null;
-      return SecureBuffer._(ptr, length);
-    } catch (_) {
-      return null;
-    }
+    final alloc = _secureAlloc;
+    if (alloc == null) return null;
+    final ptr = alloc(length);
+    if (ptr == nullptr) return null;
+    return SecureBuffer._(ptr, length);
   }
 
   /// Fallback zeroing for when FFI is not available (tests, unsupported platform).
@@ -298,11 +294,7 @@ class SecureBuffer {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    try {
-      SecureMemory._secureFree(_ptr, length);
-    } catch (_) {
-      // Best effort
-    }
+    SecureMemory._secureFree?.call(_ptr, length);
     _ptr = nullptr;
   }
 }

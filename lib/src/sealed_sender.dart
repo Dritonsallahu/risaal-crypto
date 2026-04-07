@@ -205,7 +205,7 @@ class SealedSenderEnvelope {
     final sealedContent = jsonEncode(certPayload);
 
     // 4. Encrypt the payload with AES-256-GCM
-    final secretKey = SecretKey(sharedSecret);
+    final secretKey = SecretKey(List<int>.from(sharedSecret));
     final secretBox = await _aesGcm.encrypt(
       utf8.encode(sealedContent),
       secretKey: secretKey,
@@ -306,7 +306,7 @@ class SealedSenderEnvelope {
     final mac = Mac(combined.sublist(combined.length - 16));
 
     final secretBox = SecretBox(ciphertext, nonce: nonce, mac: mac);
-    final secretKey = SecretKey(sharedSecret);
+    final secretKey = SecretKey(List<int>.from(sharedSecret));
 
     final plainBytes = await _aesGcm.decrypt(secretBox, secretKey: secretKey);
     final payload = jsonDecode(utf8.decode(plainBytes)) as Map<String, dynamic>;
@@ -415,7 +415,7 @@ class SealedSenderEnvelope {
 
     // HKDF to derive the final symmetric key
     final derived = await _hkdf.deriveKey(
-      secretKey: SecretKey(rawBytes),
+      secretKey: SecretKey(List<int>.from(rawBytes)),
       info: _info.codeUnits,
       nonce: Uint8List(32), // 32-byte zero salt
     );

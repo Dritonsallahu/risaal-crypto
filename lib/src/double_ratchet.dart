@@ -249,8 +249,9 @@ class DoubleRatchet {
     final (newChainKey, messageKey) = await _kdfCK(chainKey);
     _state.sendingChainKey = base64Encode(newChainKey);
 
-    // Encrypt with AES-256-GCM
-    final secretKey = SecretKey(messageKey);
+    // Encrypt with AES-256-GCM — copy bytes so zeroBytes() below
+    // doesn't corrupt the key inside the cryptography package's internals
+    final secretKey = SecretKey(List<int>.from(messageKey));
     final secretBox = await _aesGcm.encrypt(
       plaintext,
       secretKey: secretKey,
@@ -462,7 +463,7 @@ class DoubleRatchet {
     List<int> messageKey,
     EncryptedMessage message,
   ) async {
-    final secretKey = SecretKey(messageKey);
+    final secretKey = SecretKey(List<int>.from(messageKey));
     final nonce = base64Decode(message.nonce);
     final combined = base64Decode(message.ciphertext);
 
@@ -493,7 +494,7 @@ class DoubleRatchet {
     List<int> dhOutput,
   ) async {
     final derived = await _hkdf.deriveKey(
-      secretKey: SecretKey(dhOutput),
+      secretKey: SecretKey(List<int>.from(dhOutput)),
       info: _ratchetInfo.codeUnits,
       nonce: rootKey,
     );
@@ -507,7 +508,7 @@ class DoubleRatchet {
   /// Derive (newChainKey, messageKey) from the current chain key using
   /// HMAC-SHA256. Message key = HMAC(ck, 0x01), new chain key = HMAC(ck, 0x02).
   static Future<(List<int>, List<int>)> _kdfCK(List<int> chainKey) async {
-    final ck = SecretKey(chainKey);
+    final ck = SecretKey(List<int>.from(chainKey));
 
     final messageKeyMac = await _hmac.calculateMac(
       [0x01],
