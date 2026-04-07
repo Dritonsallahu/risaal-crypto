@@ -8,14 +8,15 @@ import 'package:risaal_crypto/src/x3dh.dart';
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /// Generate a valid PreKeyBundle with all fields populated.
-Future<({
-  PreKeyBundle bundle,
-  KeyPair identityKP,
-  KeyPair signingKP,
-  SignedPreKey signedPreKey,
-  OneTimePreKey otpk,
-  KyberKeyPair kyberKP,
-})> _generateFullBundle() async {
+Future<
+    ({
+      PreKeyBundle bundle,
+      KeyPair identityKP,
+      KeyPair signingKP,
+      SignedPreKey signedPreKey,
+      OneTimePreKey otpk,
+      KyberKeyPair kyberKP,
+    })> _generateFullBundle() async {
   final identityKP = await SignalKeyHelper.generateX25519KeyPair();
   final signingKP = await SignalKeyHelper.generateSigningKeyPair();
   final signedPreKey = await SignalKeyHelper.generateSignedPreKey(1, signingKP);
@@ -53,13 +54,14 @@ Future<({
 }
 
 /// Generate a valid PreKeyBundle WITHOUT a Kyber pre-key (classical only).
-Future<({
-  PreKeyBundle bundle,
-  KeyPair identityKP,
-  KeyPair signingKP,
-  SignedPreKey signedPreKey,
-  OneTimePreKey otpk,
-})> _generateClassicalBundle() async {
+Future<
+    ({
+      PreKeyBundle bundle,
+      KeyPair identityKP,
+      KeyPair signingKP,
+      SignedPreKey signedPreKey,
+      OneTimePreKey otpk,
+    })> _generateClassicalBundle() async {
   final identityKP = await SignalKeyHelper.generateX25519KeyPair();
   final signingKP = await SignalKeyHelper.generateSigningKeyPair();
   final signedPreKey = await SignalKeyHelper.generateSignedPreKey(1, signingKP);
@@ -301,8 +303,7 @@ void main() {
       );
     });
 
-    test('requirePq responder throws when Kyber decapsulation fails',
-        () async {
+    test('requirePq responder throws when Kyber decapsulation fails', () async {
       final data = await _generateFullBundle();
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
 
@@ -522,8 +523,8 @@ void main() {
       expect(classicalResult.pqxdhUsed, isFalse);
 
       // The secrets should differ (different ephemeral keys + Kyber)
-      expect(pqResult.sharedSecret,
-          isNot(equals(classicalResult.sharedSecret)));
+      expect(
+          pqResult.sharedSecret, isNot(equals(classicalResult.sharedSecret)));
     });
 
     // ── Default policy is preferPq ─────────────────────────────────────

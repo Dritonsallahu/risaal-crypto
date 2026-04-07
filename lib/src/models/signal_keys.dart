@@ -319,24 +319,24 @@ class PreKeyBundle {
       );
     }
     return PreKeyBundle(
-        userId: json['userId'] as String,
-        deviceId: json['deviceId'] as String,
-        identityKey: json['identityKey'] as String,
-        identitySigningKey: signingKey,
-        signedPreKey: SignedPreKeyPublic.fromJson(
-          json['signedPreKey'] as Map<String, dynamic>,
-        ),
-        oneTimePreKey: json['oneTimePreKey'] != null
-            ? OneTimePreKeyPublic.fromJson(
-                json['oneTimePreKey'] as Map<String, dynamic>,
-              )
-            : null,
-        kyberPreKey: json['kyberPreKey'] != null
-            ? KyberPreKeyPublic.fromJson(
-                json['kyberPreKey'] as Map<String, dynamic>,
-              )
-            : null,
-      );
+      userId: json['userId'] as String,
+      deviceId: json['deviceId'] as String,
+      identityKey: json['identityKey'] as String,
+      identitySigningKey: signingKey,
+      signedPreKey: SignedPreKeyPublic.fromJson(
+        json['signedPreKey'] as Map<String, dynamic>,
+      ),
+      oneTimePreKey: json['oneTimePreKey'] != null
+          ? OneTimePreKeyPublic.fromJson(
+              json['oneTimePreKey'] as Map<String, dynamic>,
+            )
+          : null,
+      kyberPreKey: json['kyberPreKey'] != null
+          ? KyberPreKeyPublic.fromJson(
+              json['kyberPreKey'] as Map<String, dynamic>,
+            )
+          : null,
+    );
   }
 
   /// Parse from the server's JSON response format.

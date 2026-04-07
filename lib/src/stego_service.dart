@@ -98,7 +98,8 @@ class StegoService {
 
     final payload = Uint8List(nonce.length + ciphertext.length + mac.length);
     payload.setRange(0, nonce.length, nonce);
-    payload.setRange(nonce.length, nonce.length + ciphertext.length, ciphertext);
+    payload.setRange(
+        nonce.length, nonce.length + ciphertext.length, ciphertext);
     payload.setRange(
       nonce.length + ciphertext.length,
       payload.length,

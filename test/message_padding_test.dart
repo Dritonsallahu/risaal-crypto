@@ -53,7 +53,8 @@ void main() {
     });
 
     test('round-trip with unicode text', () {
-      const original = 'Shqip: Pershendetje! Arabic: \u0645\u0631\u062D\u0628\u0627';
+      const original =
+          'Shqip: Pershendetje! Arabic: \u0645\u0631\u062D\u0628\u0627';
       final padded = MessagePadding.padString(original);
       final recovered = MessagePadding.unpadString(padded);
 
@@ -105,8 +106,7 @@ void main() {
         expect(
           buckets.contains(padded.length),
           isTrue,
-          reason:
-              'Padded length ${padded.length} for input length $len '
+          reason: 'Padded length ${padded.length} for input length $len '
               'is not a valid bucket size',
         );
       }

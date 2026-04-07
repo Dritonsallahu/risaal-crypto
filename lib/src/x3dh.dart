@@ -137,7 +137,7 @@ class X3DH {
       CryptoDebugLogger.log(
         'X3DH',
         'WARNING: PQXDH preferred but recipient has no Kyber key — '
-        'degrading to classical X25519-only',
+            'degrading to classical X25519-only',
       );
     } else {
       // Bundle has Kyber key — attempt encapsulation
@@ -158,7 +158,7 @@ class X3DH {
         CryptoDebugLogger.log(
           'X3DH',
           'WARNING: Kyber encapsulation failed — degrading to '
-          'classical X25519-only: $e',
+              'classical X25519-only: $e',
         );
         kyberSharedSecret = null;
         kyberCiphertext = null;
@@ -259,7 +259,7 @@ class X3DH {
         CryptoDebugLogger.log(
           'X3DH',
           'WARNING: Kyber decapsulation failed (responder) — '
-          'degrading to classical X25519-only: $e',
+              'degrading to classical X25519-only: $e',
         );
         kyberSharedSecret = null;
       }

@@ -6,10 +6,19 @@ import 'package:risaal_crypto/src/x3dh.dart';
 void main() {
   // ── Helper: generate a full PreKeyBundle simulating Bob's server-side keys ──
 
-  Future<(PreKeyBundle bundle, KeyPair identityKP, KeyPair signingKP, SignedPreKey signedPreKey, OneTimePreKey otpk, KyberKeyPair kyberKP)> generateBobBundle() async {
+  Future<
+      (
+        PreKeyBundle bundle,
+        KeyPair identityKP,
+        KeyPair signingKP,
+        SignedPreKey signedPreKey,
+        OneTimePreKey otpk,
+        KyberKeyPair kyberKP
+      )> generateBobBundle() async {
     final identityKP = await SignalKeyHelper.generateX25519KeyPair();
     final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-    final signedPreKey = await SignalKeyHelper.generateSignedPreKey(1, signingKP);
+    final signedPreKey =
+        await SignalKeyHelper.generateSignedPreKey(1, signingKP);
     final otpks = await SignalKeyHelper.generateOneTimePreKeys(1, 1);
     final kyberKP = SignalKeyHelper.generateKyberKeyPair();
 
@@ -156,7 +165,8 @@ void main() {
         signedPreKey: SignedPreKeyPublic(
           keyId: signedPreKey.keyId,
           publicKey: signedPreKey.keyPair.publicKey,
-          signature: signedPreKey.signature, // Signed by correct key, but bundle claims wrong
+          signature: signedPreKey
+              .signature, // Signed by correct key, but bundle claims wrong
         ),
       );
 

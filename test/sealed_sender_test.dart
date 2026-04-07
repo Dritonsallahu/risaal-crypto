@@ -90,8 +90,7 @@ void main() {
       );
 
       // Ephemeral public key should be 32 bytes (X25519)
-      final ephPubBytes =
-          base64Decode(sealed['ephemeralPublicKey'] as String);
+      final ephPubBytes = base64Decode(sealed['ephemeralPublicKey'] as String);
       expect(ephPubBytes.length, 32);
     });
   });

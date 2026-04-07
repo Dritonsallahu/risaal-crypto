@@ -42,8 +42,9 @@ class SenderKeyState {
   final String senderId;
   int iteration;
   List<int> chainKey; // 32 bytes
-  final String signingPublicKey;   // Ed25519 public key (base64)
-  final String? signingPrivateKey; // Ed25519 private key (base64) — only for OUR OWN sender key
+  final String signingPublicKey; // Ed25519 public key (base64)
+  final String?
+      signingPrivateKey; // Ed25519 private key (base64) — only for OUR OWN sender key
 
   SenderKeyState({
     required this.groupId,
@@ -55,13 +56,13 @@ class SenderKeyState {
   });
 
   Map<String, dynamic> toJson() => {
-    'groupId': groupId,
-    'senderId': senderId,
-    'iteration': iteration,
-    'chainKey': base64Encode(chainKey),
-    'signingPublicKey': signingPublicKey,
-    if (signingPrivateKey != null) 'signingPrivateKey': signingPrivateKey,
-  };
+        'groupId': groupId,
+        'senderId': senderId,
+        'iteration': iteration,
+        'chainKey': base64Encode(chainKey),
+        'signingPublicKey': signingPublicKey,
+        if (signingPrivateKey != null) 'signingPrivateKey': signingPrivateKey,
+      };
 
   factory SenderKeyState.fromJson(Map<String, dynamic> json) {
     // Migration: detect legacy format (shared HMAC key) vs new Ed25519 format
@@ -133,12 +134,12 @@ class SenderKeyDistribution {
   });
 
   Map<String, dynamic> toJson() => {
-    'groupId': groupId,
-    'senderId': senderId,
-    'iteration': iteration,
-    'chainKey': chainKey,
-    'signingKey': signingKey,
-  };
+        'groupId': groupId,
+        'senderId': senderId,
+        'iteration': iteration,
+        'chainKey': chainKey,
+        'signingKey': signingKey,
+      };
 
   factory SenderKeyDistribution.fromJson(Map<String, dynamic> json) =>
       SenderKeyDistribution(
@@ -189,11 +190,11 @@ class SenderKeyMessage {
   });
 
   Map<String, dynamic> toJson() => {
-    'iteration': iteration,
-    'ciphertext': ciphertext,
-    'iv': iv,
-    'signature': signature,
-  };
+        'iteration': iteration,
+        'ciphertext': ciphertext,
+        'iv': iv,
+        'signature': signature,
+      };
 
   factory SenderKeyMessage.fromJson(Map<String, dynamic> json) =>
       SenderKeyMessage(
@@ -258,7 +259,7 @@ class SenderKeyManager {
   final Map<String, Completer<void>?> _decryptLocks = {};
 
   SenderKeyManager({required CryptoStorage cryptoStorage})
-    : _cryptoStorage = cryptoStorage;
+      : _cryptoStorage = cryptoStorage;
 
   // ── Storage Helpers ─────────────────────────────────────────────
 
@@ -266,7 +267,8 @@ class SenderKeyManager {
     String groupId,
     String senderId,
     SenderKeyState state,
-  ) => _cryptoStorage.saveSenderKeyRaw(groupId, senderId, state.toJson());
+  ) =>
+      _cryptoStorage.saveSenderKeyRaw(groupId, senderId, state.toJson());
 
   Future<SenderKeyState?> _loadSenderKey(
     String groupId,
@@ -665,5 +667,4 @@ class SenderKeyManager {
       value & 0xFF,
     ];
   }
-
 }

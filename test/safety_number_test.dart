@@ -204,8 +204,10 @@ void main() {
     test('parseQrPayload rejects invalid payloads', () {
       expect(SafetyNumber.parseQrPayload('invalid'), isNull);
       expect(SafetyNumber.parseQrPayload('risaal-verify:v0:short'), isNull);
-      expect(SafetyNumber.parseQrPayload('risaal-verify:v0:${'a' * 60}'), isNull);
-      expect(SafetyNumber.parseQrPayload('risaal-verify:v1:${'0' * 60}'), isNull);
+      expect(
+          SafetyNumber.parseQrPayload('risaal-verify:v0:${'a' * 60}'), isNull);
+      expect(
+          SafetyNumber.parseQrPayload('risaal-verify:v1:${'0' * 60}'), isNull);
     });
   });
 }

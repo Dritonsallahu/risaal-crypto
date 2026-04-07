@@ -279,8 +279,7 @@ void main() {
       );
     });
 
-    test('different messages have different nonces and both succeed',
-        () async {
+    test('different messages have different nonces and both succeed', () async {
       final senderKp = await SignalKeyHelper.generateX25519KeyPair();
       final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
 

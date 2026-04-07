@@ -47,12 +47,13 @@ PreKeyBundle _bundleFromMap(
 }
 
 /// Establish a full bidirectional session between Alice and Bob.
-Future<({
-  SignalProtocolManager alice,
-  FakeSecureStorage aliceStorage,
-  SignalProtocolManager bob,
-  FakeSecureStorage bobStorage,
-})> _createFullSession() async {
+Future<
+    ({
+      SignalProtocolManager alice,
+      FakeSecureStorage aliceStorage,
+      SignalProtocolManager bob,
+      FakeSecureStorage bobStorage,
+    })> _createFullSession() async {
   final aliceStorage = FakeSecureStorage();
   final bobStorage = FakeSecureStorage();
   final alice = SignalProtocolManager(secureStorage: aliceStorage);
@@ -333,8 +334,7 @@ void main() {
       );
     });
 
-    test(
-        'resets outside the 1-hour window do not count toward rate limit',
+    test('resets outside the 1-hour window do not count toward rate limit',
         () async {
       final bobStorage = FakeSecureStorage();
       final bob = SignalProtocolManager(secureStorage: bobStorage);
@@ -424,10 +424,8 @@ void main() {
 
       // Save 15 timestamps -- should be trimmed to 10
       final now = DateTime.now().millisecondsSinceEpoch;
-      final timestamps =
-          List.generate(15, (i) => now - (15 - i) * 1000);
-      await cryptoStorage.saveResetTimestamps(
-          'user-a', 'device-a', timestamps);
+      final timestamps = List.generate(15, (i) => now - (15 - i) * 1000);
+      await cryptoStorage.saveResetTimestamps('user-a', 'device-a', timestamps);
 
       final loaded =
           await cryptoStorage.loadResetTimestamps('user-a', 'device-a');
@@ -514,8 +512,8 @@ void main() {
       expect(await bob.hasSession('alice-id', 'alice-device'), isTrue);
 
       // Verify bidirectional messaging works on the new session
-      final e1 = await bob.encryptMessage(
-          'alice-id', 'alice-device', 'Bob reply');
+      final e1 =
+          await bob.encryptMessage('alice-id', 'alice-device', 'Bob reply');
       final p1 = await alice.decryptMessage('bob-id', 'bob-device', e1);
       expect(p1, equals('Bob reply'));
 
@@ -565,8 +563,8 @@ void main() {
       };
 
       // Corrupt a message to trigger auto-reset
-      final envelope = await alice.encryptMessage(
-          'bob-id', 'bob-device', 'trigger reset');
+      final envelope =
+          await alice.encryptMessage('bob-id', 'bob-device', 'trigger reset');
       final msgMap = envelope['message'] as Map<String, dynamic>;
       final ct = base64Decode(msgMap['ciphertext'] as String);
       ct[0] ^= 0xFF;

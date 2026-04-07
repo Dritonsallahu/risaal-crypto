@@ -25,7 +25,8 @@ void main() {
     test('unicode text (emojis, Arabic, CJK) round-trips', () async {
       final image = _createTestImage(100, 100);
       final key = _generateKey();
-      const plaintext = '\u0645\u0631\u062D\u0628\u0627 \u{1F512} \u4F60\u597D \u{1F30D} \u{1F60A}';
+      const plaintext =
+          '\u0645\u0631\u062D\u0628\u0627 \u{1F512} \u4F60\u597D \u{1F30D} \u{1F60A}';
 
       final embedded = await stego.embed(image, 100, 100, plaintext, key);
       final extracted = await stego.extract(embedded, 100, 100, key);
@@ -90,7 +91,8 @@ Security is paramount.''';
   });
 
   group('StegoService security properties', () {
-    test('same plaintext + same key -> different output (random nonce)', () async {
+    test('same plaintext + same key -> different output (random nonce)',
+        () async {
       final image = _createTestImage(100, 100);
       final key = _generateKey();
       const plaintext = 'Same message';
@@ -120,7 +122,8 @@ Security is paramount.''';
       expect(extracted, isNull);
     });
 
-    test('tampered pixel data -> extract returns null or different text', () async {
+    test('tampered pixel data -> extract returns null or different text',
+        () async {
       final image = _createTestImage(100, 100);
       final key = _generateKey();
       const plaintext = 'Integrity test';
@@ -129,7 +132,8 @@ Security is paramount.''';
 
       // Flip multiple bits in the ciphertext area to ensure MAC failure
       for (var i = 200; i < 220; i++) {
-        if (i % 4 != 3) { // Don't modify alpha
+        if (i % 4 != 3) {
+          // Don't modify alpha
           embedded[i] ^= 0xFF; // flip entire byte
         }
       }
@@ -140,7 +144,8 @@ Security is paramount.''';
       expect(extracted, isNull);
     });
 
-    test('original image buffer is NOT modified (embed returns new buffer)', () async {
+    test('original image buffer is NOT modified (embed returns new buffer)',
+        () async {
       final image = _createTestImage(50, 50);
       final originalCopy = Uint8List.fromList(image);
       final key = _generateKey();
@@ -271,7 +276,8 @@ Security is paramount.''';
   });
 
   group('StegoService malformed payload handling', () {
-    test('payload length claims to be larger than image capacity -> null', () async {
+    test('payload length claims to be larger than image capacity -> null',
+        () async {
       final image = _createTestImage(100, 100);
       final key = _generateKey();
 
@@ -318,7 +324,8 @@ Security is paramount.''';
       expect(extracted, isNull);
     });
 
-    test('payload length < 28 bytes (too small for nonce+mac) -> null', () async {
+    test('payload length < 28 bytes (too small for nonce+mac) -> null',
+        () async {
       final image = _createTestImage(100, 100);
       final key = _generateKey();
 
@@ -381,7 +388,8 @@ Security is paramount.''';
   });
 
   group('StegoService visual imperceptibility', () {
-    test('embedded image LSB changes are minimal (max 1 bit per channel)', () async {
+    test('embedded image LSB changes are minimal (max 1 bit per channel)',
+        () async {
       final original = _createTestImage(50, 50);
       final key = _generateKey();
       const plaintext = 'Test';

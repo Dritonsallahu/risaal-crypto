@@ -44,7 +44,8 @@ void main() {
       expect(utf8.decode(decrypted), 'Hello Bob!');
     });
 
-    test('Alice sends multiple sequential messages, Bob decrypts all', () async {
+    test('Alice sends multiple sequential messages, Bob decrypts all',
+        () async {
       final (alice, bob) = await _createSession();
 
       final messages = [
@@ -249,14 +250,12 @@ void main() {
 
       for (var round = 0; round < 5; round++) {
         // Alice -> Bob
-        final encAB =
-            await alice.encrypt(utf8.encode('A->B round $round'));
+        final encAB = await alice.encrypt(utf8.encode('A->B round $round'));
         final decAB = await bob.decrypt(encAB);
         expect(utf8.decode(decAB), 'A->B round $round');
 
         // Bob -> Alice
-        final encBA =
-            await bob.encrypt(utf8.encode('B->A round $round'));
+        final encBA = await bob.encrypt(utf8.encode('B->A round $round'));
         final decBA = await alice.decrypt(encBA);
         expect(utf8.decode(decBA), 'B->A round $round');
       }

@@ -7,16 +7,18 @@ import 'fake_secure_storage.dart';
 class CryptoTestFixtures {
   /// Generate a complete set of Signal Protocol keys for one user.
   /// Returns: (identityKP, signingKP, signedPreKey, oneTimePreKeys, kyberKP)
-  static Future<({
-    KeyPair identityKP,
-    KeyPair signingKP,
-    SignedPreKey signedPreKey,
-    List<OneTimePreKey> oneTimePreKeys,
-    KyberKeyPair? kyberKP,
-  })> generateFullKeySet() async {
+  static Future<
+      ({
+        KeyPair identityKP,
+        KeyPair signingKP,
+        SignedPreKey signedPreKey,
+        List<OneTimePreKey> oneTimePreKeys,
+        KyberKeyPair? kyberKP,
+      })> generateFullKeySet() async {
     final identityKP = await SignalKeyHelper.generateIdentityKeyPair();
     final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-    final signedPreKey = await SignalKeyHelper.generateSignedPreKey(0, signingKP);
+    final signedPreKey =
+        await SignalKeyHelper.generateSignedPreKey(0, signingKP);
     final oneTimePreKeys = await SignalKeyHelper.generateOneTimePreKeys(0, 5);
 
     KyberKeyPair? kyberKP;
@@ -69,7 +71,8 @@ class CryptoTestFixtures {
 
   /// Create a fully initialized SignalProtocolManager with in-memory storage.
   /// Calls initialize() to generate all keys.
-  static Future<(SignalProtocolManager, FakeSecureStorage)> createInitializedManager() async {
+  static Future<(SignalProtocolManager, FakeSecureStorage)>
+      createInitializedManager() async {
     final storage = FakeSecureStorage();
     final manager = SignalProtocolManager(secureStorage: storage);
     await manager.initialize();
@@ -78,12 +81,13 @@ class CryptoTestFixtures {
 
   /// Create two initialized managers (Alice and Bob) with established sessions.
   /// Returns both managers and their storages. Alice has a session to Bob.
-  static Future<({
-    SignalProtocolManager alice,
-    FakeSecureStorage aliceStorage,
-    SignalProtocolManager bob,
-    FakeSecureStorage bobStorage,
-  })> createPairedManagers() async {
+  static Future<
+      ({
+        SignalProtocolManager alice,
+        FakeSecureStorage aliceStorage,
+        SignalProtocolManager bob,
+        FakeSecureStorage bobStorage,
+      })> createPairedManagers() async {
     final (alice, aliceStorage) = await createInitializedManager();
     final (bob, bobStorage) = await createInitializedManager();
 
@@ -107,14 +111,18 @@ class CryptoTestFixtures {
       ),
       oneTimePreKey: bobOneTimePreKeys.isNotEmpty
           ? OneTimePreKeyPublic(
-              keyId: (bobOneTimePreKeys.first as Map<String, dynamic>)['keyId'] as int,
-              publicKey: (bobOneTimePreKeys.first as Map<String, dynamic>)['publicKey'] as String,
+              keyId: (bobOneTimePreKeys.first as Map<String, dynamic>)['keyId']
+                  as int,
+              publicKey: (bobOneTimePreKeys.first
+                  as Map<String, dynamic>)['publicKey'] as String,
             )
           : null,
       kyberPreKey: bobBundle.containsKey('kyberPreKey')
           ? KyberPreKeyPublic(
-              keyId: (bobBundle['kyberPreKey'] as Map<String, dynamic>)['keyId'] as int,
-              publicKey: (bobBundle['kyberPreKey'] as Map<String, dynamic>)['publicKey'] as String,
+              keyId: (bobBundle['kyberPreKey'] as Map<String, dynamic>)['keyId']
+                  as int,
+              publicKey: (bobBundle['kyberPreKey']
+                  as Map<String, dynamic>)['publicKey'] as String,
             )
           : null,
     );

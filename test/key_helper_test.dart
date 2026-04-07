@@ -8,7 +8,8 @@ void main() {
   // ── X25519 Key Pair Generation ──────────────────────────────────────
 
   group('SignalKeyHelper.generateX25519KeyPair', () {
-    test('produces a valid key pair with base64-encoded 32-byte keys', () async {
+    test('produces a valid key pair with base64-encoded 32-byte keys',
+        () async {
       final kp = await SignalKeyHelper.generateX25519KeyPair();
 
       final pubBytes = base64Decode(kp.publicKey);
@@ -194,8 +195,7 @@ void main() {
     test('shared secret has correct length (32 bytes)', () {
       final kp = SignalKeyHelper.generateKyberKeyPair();
 
-      final (_, sharedSecret) =
-          SignalKeyHelper.kyberEncapsulate(kp.publicKey);
+      final (_, sharedSecret) = SignalKeyHelper.kyberEncapsulate(kp.publicKey);
 
       expect(sharedSecret.length, 32);
     });

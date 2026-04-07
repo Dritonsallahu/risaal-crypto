@@ -51,12 +51,13 @@ PreKeyBundle _bundleFromMap(
 /// 1. Alice creates session from Bob's bundle (X3DH initiator).
 /// 2. Alice encrypts a prekey message.
 /// 3. Bob decrypts it (X3DH responder) -- this establishes Bob's session.
-Future<({
-  SignalProtocolManager alice,
-  FakeSecureStorage aliceStorage,
-  SignalProtocolManager bob,
-  FakeSecureStorage bobStorage,
-})> _createFullSession() async {
+Future<
+    ({
+      SignalProtocolManager alice,
+      FakeSecureStorage aliceStorage,
+      SignalProtocolManager bob,
+      FakeSecureStorage bobStorage,
+    })> _createFullSession() async {
   final aliceStorage = FakeSecureStorage();
   final bobStorage = FakeSecureStorage();
   final alice = SignalProtocolManager(secureStorage: aliceStorage);
@@ -71,7 +72,8 @@ Future<({
 
   // Alice creates session from Bob's key bundle
   final bobBundle = await bob.generateKeyBundle();
-  final bundle = _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
+  final bundle =
+      _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
   await alice.createSession(bundle);
 
   // Alice sends first message (prekey) to establish Bob's side
@@ -346,19 +348,16 @@ void main() {
       final bob = session.bob;
 
       // Unicode: emoji, Arabic, CJK
-      const unicode = 'Hello! \u{1F512} \u0645\u0631\u062D\u0628\u0627 \u4F60\u597D';
-      final e1 =
-          await alice.encryptMessage('bob-id', 'bob-device', unicode);
-      final p1 =
-          await bob.decryptMessage('alice-id', 'alice-device', e1);
+      const unicode =
+          'Hello! \u{1F512} \u0645\u0631\u062D\u0628\u0627 \u4F60\u597D';
+      final e1 = await alice.encryptMessage('bob-id', 'bob-device', unicode);
+      final p1 = await bob.decryptMessage('alice-id', 'alice-device', e1);
       expect(p1, equals(unicode));
 
       // Long text (2000+ characters)
       final longText = 'A' * 2500;
-      final e2 =
-          await alice.encryptMessage('bob-id', 'bob-device', longText);
-      final p2 =
-          await bob.decryptMessage('alice-id', 'alice-device', e2);
+      final e2 = await alice.encryptMessage('bob-id', 'bob-device', longText);
+      final p2 = await bob.decryptMessage('alice-id', 'alice-device', e2);
       expect(p2, equals(longText));
 
       // Empty-ish content (single character)
@@ -368,8 +367,7 @@ void main() {
         'bob-device',
         singleChar,
       );
-      final p3 =
-          await bob.decryptMessage('alice-id', 'alice-device', e3);
+      final p3 = await bob.decryptMessage('alice-id', 'alice-device', e3);
       expect(p3, equals(singleChar));
 
       // Newlines and special chars
@@ -379,8 +377,7 @@ void main() {
         'bob-device',
         special,
       );
-      final p4 =
-          await bob.decryptMessage('alice-id', 'alice-device', e4);
+      final p4 = await bob.decryptMessage('alice-id', 'alice-device', e4);
       expect(p4, equals(special));
     });
   });
@@ -513,8 +510,7 @@ void main() {
       await bob.processGroupSenderKey(groupId, 'charlie-id', charlieDist);
 
       // Alice sends a message -- Bob and Charlie decrypt it
-      final aliceMsg =
-          await alice.encryptGroupMessage(groupId, 'From Alice');
+      final aliceMsg = await alice.encryptGroupMessage(groupId, 'From Alice');
       expect(
         await bob.decryptGroupMessage(groupId, 'alice-id', aliceMsg),
         equals('From Alice'),
@@ -674,8 +670,7 @@ void main() {
     });
 
     test('Generated keys have sequential IDs', () async {
-      final (manager, _) =
-          await CryptoTestFixtures.createInitializedManager();
+      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
 
       // After initialize(), 20 OTPs are generated (IDs 0-19), nextPreKeyId=20
       final batch1 = await manager.generateOneTimePreKeys(5);
@@ -697,8 +692,7 @@ void main() {
 
   group('SignalProtocolManager error handling', () {
     test('encryptMessage without session throws StateError', () async {
-      final (manager, _) =
-          await CryptoTestFixtures.createInitializedManager();
+      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
 
       expect(
         () => manager.encryptMessage(

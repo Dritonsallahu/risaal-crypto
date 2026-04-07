@@ -34,8 +34,7 @@ class SafetyNumber {
     required String theirIdentityKey,
   }) {
     final myFingerprint = _computeFingerprint(myUserId, myIdentityKey);
-    final theirFingerprint =
-        _computeFingerprint(theirUserId, theirIdentityKey);
+    final theirFingerprint = _computeFingerprint(theirUserId, theirIdentityKey);
 
     // Sort lexicographically to ensure both sides produce the same number
     final List<String> fingerprints = [myFingerprint, theirFingerprint];
@@ -74,7 +73,8 @@ class SafetyNumber {
     final userIdBytes = utf8.encode(userId);
 
     // Initial hash input: version + identityKey + userId
-    final initialInput = Uint8List(1 + identityKeyBytes.length + userIdBytes.length);
+    final initialInput =
+        Uint8List(1 + identityKeyBytes.length + userIdBytes.length);
     initialInput[0] = _version;
     initialInput.setRange(1, 1 + identityKeyBytes.length, identityKeyBytes);
     initialInput.setRange(

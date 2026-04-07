@@ -211,7 +211,8 @@ void main() {
       expect(enc1.ciphertext, isNot(enc2.ciphertext));
     });
 
-    test('Same plaintext produces different ciphertexts (different IV each time)',
+    test(
+        'Same plaintext produces different ciphertexts (different IV each time)',
         () async {
       final (manager, _) = await _createManager('alice');
       const groupId = 'group-001';

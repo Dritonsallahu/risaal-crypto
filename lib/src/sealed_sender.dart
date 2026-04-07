@@ -177,19 +177,23 @@ class SealedSenderEnvelope {
     required String recipientIdentityPublicKey,
     String? serverToken,
   }) async {
-    CryptoDebugLogger.log('SS_SEAL', 'Sealing: sender=$senderId device=$senderDeviceId');
-    CryptoDebugLogger.logKeyInfo('SS_SEAL', 'Recipient identity key', recipientIdentityPublicKey);
+    CryptoDebugLogger.log(
+        'SS_SEAL', 'Sealing: sender=$senderId device=$senderDeviceId');
+    CryptoDebugLogger.logKeyInfo(
+        'SS_SEAL', 'Recipient identity key', recipientIdentityPublicKey);
 
     // 1. Generate an ephemeral X25519 key pair for this seal operation
     final ephemeralKP = await SignalKeyHelper.generateX25519KeyPair();
-    CryptoDebugLogger.logKeyInfo('SS_SEAL', 'Ephemeral key', ephemeralKP.publicKey);
+    CryptoDebugLogger.logKeyInfo(
+        'SS_SEAL', 'Ephemeral key', ephemeralKP.publicKey);
 
     // 2. Derive a shared secret: DH(ephemeral, recipientIdentityPub)
     final sharedSecret = await _deriveSharedKey(
       ephemeralKP,
       recipientIdentityPublicKey,
     );
-    CryptoDebugLogger.log('SS_SEAL', 'Shared secret derived: ${sharedSecret.length} bytes');
+    CryptoDebugLogger.log(
+        'SS_SEAL', 'Shared secret derived: ${sharedSecret.length} bytes');
 
     // 3. Build the sender certificate + message payload
     final certPayload = <String, dynamic>{
@@ -214,8 +218,7 @@ class SealedSenderEnvelope {
     // 5. Build the wire-format envelope
     return {
       'ephemeralPublicKey': ephemeralKP.publicKey,
-      'ciphertext':
-          base64Encode(secretBox.cipherText + secretBox.mac.bytes),
+      'ciphertext': base64Encode(secretBox.cipherText + secretBox.mac.bytes),
       'nonce': base64Encode(secretBox.nonce),
     };
   }
@@ -279,8 +282,10 @@ class SealedSenderEnvelope {
     final ephemeralPublicKey = sealedEnvelope['ephemeralPublicKey'] as String;
     final ciphertextB64 = sealedEnvelope['ciphertext'] as String;
     final nonceB64 = sealedEnvelope['nonce'] as String;
-    CryptoDebugLogger.logKeyInfo('SS_UNSEAL', 'Ephemeral key from envelope', ephemeralPublicKey);
-    CryptoDebugLogger.logKeyInfo('SS_UNSEAL', 'Our identity key', recipientIdentityKeyPair.publicKey);
+    CryptoDebugLogger.logKeyInfo(
+        'SS_UNSEAL', 'Ephemeral key from envelope', ephemeralPublicKey);
+    CryptoDebugLogger.logKeyInfo(
+        'SS_UNSEAL', 'Our identity key', recipientIdentityKeyPair.publicKey);
 
     // 1. Nonce replay check — reject before any expensive crypto
     if (seenNonces != null && seenNonces.contains(nonceB64)) {
@@ -294,12 +299,14 @@ class SealedSenderEnvelope {
       recipientIdentityKeyPair,
       ephemeralPublicKey,
     );
-    CryptoDebugLogger.log('SS_UNSEAL', 'Shared secret derived: ${sharedSecret.length} bytes');
+    CryptoDebugLogger.log(
+        'SS_UNSEAL', 'Shared secret derived: ${sharedSecret.length} bytes');
 
     // 3. Decrypt the AES-256-GCM ciphertext
     final combined = base64Decode(ciphertextB64);
     final nonce = base64Decode(nonceB64);
-    CryptoDebugLogger.log('SS_UNSEAL', 'Ciphertext: ${combined.length} bytes, nonce: ${nonce.length} bytes');
+    CryptoDebugLogger.log('SS_UNSEAL',
+        'Ciphertext: ${combined.length} bytes, nonce: ${nonce.length} bytes');
 
     // Last 16 bytes are the GCM MAC tag
     final ciphertext = combined.sublist(0, combined.length - 16);
@@ -311,7 +318,8 @@ class SealedSenderEnvelope {
     final plainBytes = await _aesGcm.decrypt(secretBox, secretKey: secretKey);
     final payload = jsonDecode(utf8.decode(plainBytes)) as Map<String, dynamic>;
 
-    CryptoDebugLogger.log('SS_UNSEAL', 'Unsealed payload: senderId=${payload['senderId']} deviceId=${payload['senderDeviceId']} innerType=${(payload['message'] as Map?)?['type']}');
+    CryptoDebugLogger.log('SS_UNSEAL',
+        'Unsealed payload: senderId=${payload['senderId']} deviceId=${payload['senderDeviceId']} innerType=${(payload['message'] as Map?)?['type']}');
 
     // 4. Replay protection — reject messages outside the configurable window
     final timestamp = payload['timestamp'] as int;
@@ -334,7 +342,7 @@ class SealedSenderEnvelope {
         CryptoDebugLogger.log(
           'SS_UNSEAL',
           'IDENTITY MISMATCH for sender $claimedSenderId — '
-          'expected key does not match claimed key',
+              'expected key does not match claimed key',
         );
         throw StateError(
           'Sealed sender identity key mismatch for user $claimedSenderId — '

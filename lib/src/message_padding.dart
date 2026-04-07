@@ -75,10 +75,8 @@ class MessagePadding {
     }
 
     // Read 4-byte big-endian length prefix
-    final dataLen = (padded[0] << 24) |
-        (padded[1] << 16) |
-        (padded[2] << 8) |
-        padded[3];
+    final dataLen =
+        (padded[0] << 24) | (padded[1] << 16) | (padded[2] << 8) | padded[3];
 
     if (dataLen < 0 || dataLen > padded.length - _lengthPrefixSize) {
       throw FormatException('Invalid padding length: $dataLen');

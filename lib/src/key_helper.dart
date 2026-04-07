@@ -191,7 +191,8 @@ class SignalKeyHelper {
     final publicKeyBytes = base64Decode(publicKeyBase64);
     final signatureBytes = base64Decode(signatureBase64);
 
-    final publicKey = SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519);
+    final publicKey =
+        SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519);
     final signature = Signature(signatureBytes, publicKey: publicKey);
 
     return algorithm.verify(data, signature: signature);
