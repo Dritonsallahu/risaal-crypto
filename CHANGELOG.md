@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-07
+
+### Fixed
+- [SECURITY] PQXDH anti-downgrade now **refuses** session establishment when a peer's bundle loses its Kyber key (previously only logged a warning). Prevents MITM from silently stripping the post-quantum layer. `PqxdhPolicy.classicalOnly` override preserved for explicit user confirmation.
+
+### Added
+- `PqxdhDowngradeError` exception for anti-downgrade enforcement
+- 8 new tests: anti-downgrade blocking, override bypass, event emission, edge cases (392 total)
+- Dependency patching policy (72h SLA) documented in `SECURITY.md`
+- GPG-signed tag release procedure documented in `BRANCH_PROTECTION.md`
+
 ## [0.2.0] - 2026-04-07
 
 ### Added
