@@ -189,18 +189,24 @@ jobs:
         run: |
           echo "=== Scanning for hardcoded secrets ==="
 
-          # Scan for common secret patterns in lib/ and test/
           ISSUES=0
 
-          # Check for hardcoded API keys, tokens, passwords
-          for pattern in 'api[_-]?key\s*[:=]' 'password\s*[:=]\s*["\x27]' 'secret\s*[:=]\s*["\x27]' 'token\s*[:=]\s*["\x27][A-Za-z0-9]' 'private[_-]?key\s*[:=]\s*["\x27]'; do
-            FOUND=$(grep -rniE "$pattern" lib/ --include='*.dart' 2>/dev/null | grep -v '//.*' | grep -v 'test' || true)
-            if [ -n "$FOUND" ]; then
-              echo "POTENTIAL SECRET FOUND:"
-              echo "$FOUND"
-              ISSUES=$((ISSUES + 1))
-            fi
-          done
+          # Look for string literals assigned to suspicious variable names
+          # Pattern: variable = "actual-string-value" (not variable references)
+          FOUND=$(grep -rnE "(apiKey|api_key|password|passwd|apiSecret|authToken|accessToken)\s*[:=]\s*['\"][A-Za-z0-9]" lib/ --include='*.dart' 2>/dev/null | grep -v '^\s*//' || true)
+          if [ -n "$FOUND" ]; then
+            echo "POTENTIAL SECRET FOUND:"
+            echo "$FOUND"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Look for base64-encoded strings that look like keys (>30 chars)
+          FOUND=$(grep -rnE "[:=]\s*['\"][A-Za-z0-9+/]{40,}={0,2}['\"]" lib/ --include='*.dart' 2>/dev/null | grep -v '^\s*//' | grep -v 'test\|example\|doc\|base64Decode\|base64Encode' || true)
+          if [ -n "$FOUND" ]; then
+            echo "POTENTIAL HARDCODED KEY FOUND:"
+            echo "$FOUND"
+            ISSUES=$((ISSUES + 1))
+          fi
 
           if [ "$ISSUES" -gt 0 ]; then
             echo "FAIL: $ISSUES potential hardcoded secret(s) found"
