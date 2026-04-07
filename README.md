@@ -2,7 +2,8 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Dart](https://img.shields.io/badge/Dart-%3E%3D3.0-0175C2.svg?logo=dart)](https://dart.dev)
-[![Tests](https://img.shields.io/badge/tests-222_passing-brightgreen.svg)](#test-suite)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#test-suite)
+[![Stability](https://img.shields.io/badge/stability-alpha-orange.svg)](SECURITY.md)
 
 **Signal Protocol implementation in pure Dart with post-quantum hybrid key agreement.**
 
@@ -281,6 +282,7 @@ flutter test --reporter expanded
 - **Kyber-768 is research-grade.** The `pqcrypto` FFI bindings have not undergone NIST certification. The hybrid design ensures that even if Kyber breaks, X25519 alone provides full security.
 - **Dart VM does not guarantee constant-time operations.** Side-channel resistance depends on the underlying `cryptography` package and VM behavior.
 - **Steganography is obscurity, not security.** LSB embedding can be detected by statistical steganalysis tools. It provides plausible deniability, not cryptographic hiding.
+- **Alpha release (0.1.0).** API surface may change between minor versions. Pin to exact version in `pubspec.yaml`.
 
 See [SECURITY.md](SECURITY.md) for the complete threat model and known limitations.
 
