@@ -85,7 +85,7 @@ These invariants MUST hold at all times. Violations are security bugs:
 2. **All DH intermediaries are zeroed:** Shared secrets from X25519 operations must be zeroed via `SecureMemory.zeroBytes()` after use
 3. **No plaintext ever logged:** `CryptoDebugLogger` only logs key prefixes (first 8 chars) in debug builds, stripped from release
 4. **Sealed Sender replay protection:** Envelopes have 5-minute maximum replay window, enforced via timestamp validation
-5. **Skipped message key cap:** Maximum 100 skipped message keys per session to prevent DoS memory exhaustion
+5. **Skipped message key cap:** Maximum 2000 skipped message keys per session to prevent DoS memory exhaustion
 6. **Sender Key chain advance cap:** Maximum 2000 iterations when advancing chain to prevent DoS CPU exhaustion
 7. **Message number monotonicity:** Message numbers must strictly increase within a session (prevents replay and reordering)
 8. **AES-256-GCM authentication:** All ciphertexts verified before decryption (prevents tampering)
@@ -130,6 +130,8 @@ We use Kyber as a **hybrid** with X25519, so even if Kyber is broken, X25519 sti
 
 These are inherent Dart platform limitations. For maximum security, consider a native implementation.
 
+**Mitigations implemented:** FFI-based volatile memory zeroing (`SecureMemory`), native heap isolation (`SecureBuffer`), defensive byte copies to prevent library corruption, immediate zeroing after every DH operation. See `docs/MEMORY_SAFETY.md` for the complete memory safety model and residual risk analysis.
+
 ### Steganography is NOT Security
 
 The `StegoService` LSB steganography feature provides **obscurity, not security:**
@@ -158,5 +160,12 @@ Security-relevant changes are documented in `CHANGELOG.md` with a `[SECURITY]` p
 - **General inquiries:** hello@risaal.org
 - **Security reports:** security@risaal.org (PGP key at https://risaal.org/security.txt)
 - **GitHub Issues:** For non-security bugs and feature requests only
+
+## Related Documentation
+
+- **[docs/MEMORY_SAFETY.md](docs/MEMORY_SAFETY.md)** — Complete memory safety model, Dart GC constraints, FFI mitigations, residual risks
+- **[docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md)** — Key compromise playbook, protocol bug response, coordinated disclosure
+- **[docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md)** — Production telemetry integration, release signing controls, incident drill procedures
+- **[docs/AUDIT_SCOPE.md](docs/AUDIT_SCOPE.md)** — Scope document for third-party security audit
 
 Thank you for helping keep Risaal secure.

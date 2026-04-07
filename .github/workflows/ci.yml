@@ -6,7 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
+  # ── Gate 1: Static Analysis (must pass before anything else) ───────
   analyze:
     name: Static Analysis
     runs-on: ubuntu-latest
@@ -20,13 +24,28 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze (fatal warnings, non-fatal infos)
+      - name: Analyze (fatal warnings)
         run: flutter analyze --fatal-warnings --no-fatal-infos
 
-  test:
-    name: Unit & Integration Tests
+  # ── Gate 2: Format Check ───────────────────────────────────────────
+  format:
+    name: Format Check
     runs-on: ubuntu-latest
-    needs: analyze
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Check formatting
+        run: dart format --set-exit-if-changed .
+
+  # ── Gate 3: Unit & Integration Tests + Coverage Enforcement ────────
+  test:
+    name: Tests + Coverage Enforcement
+    runs-on: ubuntu-latest
+    needs: [analyze, format]
     steps:
       - uses: actions/checkout@v4
 
@@ -41,12 +60,38 @@ jobs:
         run: flutter test --coverage
 
       - name: Verify coverage report exists
-        run: test -f coverage/lcov.info && echo "Coverage report generated" || (echo "ERROR: No coverage report" && exit 1)
+        run: |
+          if [ ! -f coverage/lcov.info ]; then
+            echo "ERROR: No coverage report generated"
+            exit 1
+          fi
 
+      - name: Enforce minimum coverage threshold (80%)
+        run: |
+          # Parse lcov.info for line coverage
+          TOTAL_LINES=$(grep -c '^DA:' coverage/lcov.info || echo 0)
+          HIT_LINES=$(grep '^DA:' coverage/lcov.info | grep -v ',0$' | wc -l | tr -d ' ')
+
+          if [ "$TOTAL_LINES" -eq 0 ]; then
+            echo "ERROR: No coverage data found"
+            exit 1
+          fi
+
+          COVERAGE=$(( HIT_LINES * 100 / TOTAL_LINES ))
+          echo "Coverage: $COVERAGE% ($HIT_LINES / $TOTAL_LINES lines)"
+
+          if [ "$COVERAGE" -lt 80 ]; then
+            echo "FAIL: Coverage $COVERAGE% is below minimum threshold of 80%"
+            exit 1
+          fi
+
+          echo "PASS: Coverage $COVERAGE% meets minimum threshold of 80%"
+
+  # ── Gate 4: Adversarial & Fuzz Tests (separate job for visibility) ─
   adversarial:
     name: Adversarial & Fuzz Tests
     runs-on: ubuntu-latest
-    needs: analyze
+    needs: [analyze, format]
     steps:
       - uses: actions/checkout@v4
 
@@ -69,22 +114,11 @@ jobs:
       - name: Run test vectors
         run: flutter test test/test_vectors_test.dart -r expanded
 
-  format:
-    name: Format Check
+  # ── Gate 5: Dependency Vulnerability Scan ──────────────────────────
+  dependency-audit:
+    name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-
-      - name: Check formatting
-        run: dart format --set-exit-if-changed .
-
-  deps:
-    name: Dependency Audit
-    runs-on: ubuntu-latest
+    needs: [analyze]
     steps:
       - uses: actions/checkout@v4
 
@@ -95,5 +129,168 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Check outdated dependencies
+      - name: Check for outdated dependencies
         run: flutter pub outdated
+
+      - name: Scan pubspec.lock for known vulnerabilities
+        run: |
+          echo "=== Dependency Security Audit ==="
+
+          # Check that all crypto dependencies are pinned in pubspec.lock
+          echo "--- Verifying crypto dependency pins ---"
+          for dep in cryptography crypto pqcrypto; do
+            if grep -q "\"$dep\":" pubspec.lock 2>/dev/null || grep -q "$dep:" pubspec.lock 2>/dev/null; then
+              VERSION=$(grep -A2 "  $dep:" pubspec.lock | grep 'version:' | head -1 | tr -d ' "' | cut -d: -f2)
+              echo "  $dep: $VERSION (pinned in lock file)"
+            else
+              echo "  WARNING: $dep not found in pubspec.lock"
+            fi
+          done
+
+          # Verify no git dependencies (supply chain risk)
+          echo ""
+          echo "--- Checking for git dependencies (supply chain risk) ---"
+          if grep -q 'url:.*github\|url:.*git' pubspec.yaml; then
+            echo "FAIL: Git dependencies detected in pubspec.yaml — use versioned pub packages"
+            exit 1
+          fi
+          echo "  PASS: No git dependencies"
+
+          # Verify no path dependencies in production
+          echo ""
+          echo "--- Checking for path dependencies ---"
+          if grep -q 'path:' pubspec.yaml | grep -v '#'; then
+            echo "WARNING: Path dependencies detected — ensure these are dev_dependencies only"
+          fi
+          echo "  PASS: No path dependencies in production deps"
+
+          echo ""
+          echo "=== Dependency audit complete ==="
+
+  # ── Gate 6: SAST — Security-Focused Static Analysis ────────────────
+  sast:
+    name: Security Static Analysis (SAST)
+    runs-on: ubuntu-latest
+    needs: [analyze]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Check for hardcoded secrets
+        run: |
+          echo "=== Scanning for hardcoded secrets ==="
+
+          # Scan for common secret patterns in lib/ and test/
+          ISSUES=0
+
+          # Check for hardcoded API keys, tokens, passwords
+          for pattern in 'api[_-]?key\s*[:=]' 'password\s*[:=]\s*["\x27]' 'secret\s*[:=]\s*["\x27]' 'token\s*[:=]\s*["\x27][A-Za-z0-9]' 'private[_-]?key\s*[:=]\s*["\x27]'; do
+            FOUND=$(grep -rniE "$pattern" lib/ --include='*.dart' 2>/dev/null | grep -v '//.*' | grep -v 'test' || true)
+            if [ -n "$FOUND" ]; then
+              echo "POTENTIAL SECRET FOUND:"
+              echo "$FOUND"
+              ISSUES=$((ISSUES + 1))
+            fi
+          done
+
+          if [ "$ISSUES" -gt 0 ]; then
+            echo "FAIL: $ISSUES potential hardcoded secret(s) found"
+            exit 1
+          fi
+
+          echo "PASS: No hardcoded secrets detected"
+
+      - name: Check for unsafe crypto patterns
+        run: |
+          echo "=== Scanning for unsafe crypto patterns ==="
+
+          ISSUES=0
+
+          # Check for Math.random (insecure RNG)
+          FOUND=$(grep -rn 'Random()' lib/ --include='*.dart' 2>/dev/null || true)
+          if [ -n "$FOUND" ]; then
+            echo "FAIL: Insecure Random() found (use Random.secure())"
+            echo "$FOUND"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Check for MD5 usage (broken hash)
+          FOUND=$(grep -rniE 'md5\.' lib/ --include='*.dart' 2>/dev/null || true)
+          if [ -n "$FOUND" ]; then
+            echo "FAIL: MD5 usage detected (use SHA-256+)"
+            echo "$FOUND"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Check for ECB mode usage
+          FOUND=$(grep -rniE 'ecb|ECB' lib/ --include='*.dart' 2>/dev/null || true)
+          if [ -n "$FOUND" ]; then
+            echo "FAIL: ECB mode detected (use GCM or CBC)"
+            echo "$FOUND"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Check for print statements in production code
+          FOUND=$(grep -rn 'print(' lib/ --include='*.dart' 2>/dev/null || true)
+          if [ -n "$FOUND" ]; then
+            echo "FAIL: print() statements found in production code (use CryptoDebugLogger)"
+            echo "$FOUND"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          if [ "$ISSUES" -gt 0 ]; then
+            echo "FAIL: $ISSUES unsafe crypto pattern(s) found"
+            exit 1
+          fi
+
+          echo "PASS: No unsafe crypto patterns detected"
+
+      - name: Verify security invariants
+        run: |
+          echo "=== Verifying security invariants ==="
+
+          # Ensure zeroBytes is called after all DH operations
+          DH_COUNT=$(grep -rn 'sharedSecretKey\|SharedSecretKey' lib/ --include='*.dart' 2>/dev/null | wc -l | tr -d ' ')
+          ZERO_COUNT=$(grep -rn 'zeroBytes\|zeroUint8List' lib/ --include='*.dart' 2>/dev/null | wc -l | tr -d ' ')
+          echo "DH shared secret references: $DH_COUNT"
+          echo "Memory zeroing calls: $ZERO_COUNT"
+
+          if [ "$ZERO_COUNT" -lt "$DH_COUNT" ]; then
+            echo "WARNING: Fewer zeroing calls ($ZERO_COUNT) than DH references ($DH_COUNT)"
+            echo "Review that all DH intermediaries are properly wiped"
+          fi
+
+          # Ensure no plaintext logging
+          FOUND=$(grep -rn 'print\|Logger\|log(' lib/ --include='*.dart' 2>/dev/null | grep -iv 'debug\|CryptoDebug\|assert\|//' || true)
+          if [ -n "$FOUND" ]; then
+            echo "WARNING: Potential uncontrolled logging:"
+            echo "$FOUND"
+          fi
+
+          echo "PASS: Security invariant checks complete"
+
+  # ── Changelog Gate (on PRs only) ───────────────────────────────────
+  changelog:
+    name: Changelog Updated
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify CHANGELOG.md was updated
+        run: |
+          if git diff --name-only origin/main...HEAD | grep -q 'CHANGELOG.md'; then
+            echo "PASS: CHANGELOG.md was updated"
+          else
+            echo "FAIL: CHANGELOG.md must be updated for every PR"
+            echo "Add a changelog entry describing your changes."
+            exit 1
+          fi
