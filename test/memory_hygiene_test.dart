@@ -356,4 +356,76 @@ void main() {
       }
     });
   });
+
+  // ── Regression: SecretKey by-reference corruption (v0.1.1) ────────
+
+  group('SecretKey corruption regression (v0.1.1)', () {
+    test(
+        'zeroing original bytes does not corrupt Double Ratchet encrypt/decrypt',
+        () async {
+      // Regression: Before the fix, SecretKey(keyBytes) stored a reference.
+      // SecureMemory.zeroBytes(keyBytes) then zeroed the key inside the
+      // SecretKey, causing SecretBoxAuthenticationError on decrypt.
+      // Fix: SecretKey(List<int>.from(keyBytes)) creates a defensive copy.
+
+      final (alice, bob) = await _createRatchetSession();
+
+      // Multiple messages to exercise chain key advancement
+      for (var i = 0; i < 5; i++) {
+        final msg = utf8.encode('Regression check message $i');
+        final encrypted = await alice.encrypt(msg);
+        final decrypted = await bob.decrypt(encrypted);
+        expect(utf8.decode(decrypted), equals('Regression check message $i'));
+      }
+
+      // Bidirectional to exercise DH ratchet step
+      for (var i = 0; i < 3; i++) {
+        final encBA = await bob.encrypt(utf8.encode('B->A $i'));
+        final decBA = await alice.decrypt(encBA);
+        expect(utf8.decode(decBA), equals('B->A $i'));
+
+        final encAB = await alice.encrypt(utf8.encode('A->B $i'));
+        final decAB = await bob.decrypt(encAB);
+        expect(utf8.decode(decAB), equals('A->B $i'));
+      }
+    });
+
+    test(
+        'zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
+        () async {
+      // Same regression but for SenderKeyManager which also uses
+      // SecretKey(List<int>.from(chainKey)) after the fix.
+
+      final storage = FakeSecureStorage();
+      final cryptoStorage = CryptoStorage(secureStorage: storage);
+      final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
+      await storage.write(key: 'user_id', value: 'alice-id');
+
+      final distribution =
+          await senderKeyManager.generateSenderKey('regression-group');
+
+      final bobStorage = FakeSecureStorage();
+      final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
+      final bobSKM = SenderKeyManager(cryptoStorage: bobCryptoStorage);
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobSKM.processSenderKeyDistribution(
+        'regression-group',
+        'alice-id',
+        distribution,
+      );
+
+      // Multiple messages to exercise chain key zeroing + key derivation
+      for (var i = 0; i < 10; i++) {
+        final msg = utf8.encode('Sender key regression $i');
+        final encrypted =
+            await senderKeyManager.encrypt('regression-group', msg);
+        final decrypted = await bobSKM.decrypt(
+          'regression-group',
+          'alice-id',
+          encrypted,
+        );
+        expect(utf8.decode(decrypted), equals('Sender key regression $i'));
+      }
+    });
+  });
 }
