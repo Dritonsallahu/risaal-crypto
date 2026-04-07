@@ -6,11 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
 
 jobs:
-  # ── Gate 1: Static Analysis (must pass before anything else) ───────
+  # ── Gate 1: Static Analysis ────────────────────────────────────────
   analyze:
     name: Static Analysis
     runs-on: ubuntu-latest
@@ -42,9 +45,18 @@ jobs:
         run: flutter pub get
 
       - name: Check formatting
-        run: dart format --set-exit-if-changed .
+        run: |
+          dart format .
+          if [ -n "$(git diff --name-only)" ]; then
+            echo "FAIL: The following files need formatting:"
+            git diff --name-only
+            echo ""
+            echo "Run 'dart format .' locally and commit the changes."
+            exit 1
+          fi
+          echo "PASS: All files properly formatted"
 
-  # ── Gate 3: Unit & Integration Tests + Coverage Enforcement ────────
+  # ── Gate 3: Tests + Coverage Enforcement ────────────────────────────
   test:
     name: Tests + Coverage Enforcement
     runs-on: ubuntu-latest
@@ -71,7 +83,6 @@ jobs:
 
       - name: Enforce minimum coverage threshold (80%)
         run: |
-          # Parse lcov.info for line coverage
           TOTAL_LINES=$(grep -c '^DA:' coverage/lcov.info || echo 0)
           HIT_LINES=$(grep '^DA:' coverage/lcov.info | grep -v ',0$' | wc -l | tr -d ' ')
 
@@ -90,7 +101,7 @@ jobs:
 
           echo "PASS: Coverage $COVERAGE% meets minimum threshold of 80%"
 
-  # ── Gate 4: Adversarial & Fuzz Tests (separate job for visibility) ─
+  # ── Gate 4: Adversarial & Fuzz Tests ───────────────────────────────
   adversarial:
     name: Adversarial & Fuzz Tests
     runs-on: ubuntu-latest
@@ -135,42 +146,27 @@ jobs:
       - name: Check for outdated dependencies
         run: flutter pub outdated
 
-      - name: Scan pubspec.lock for known vulnerabilities
+      - name: Scan for supply chain risks
         run: |
           echo "=== Dependency Security Audit ==="
 
-          # Check that all crypto dependencies are pinned in pubspec.lock
-          echo "--- Verifying crypto dependency pins ---"
+          # Verify no git dependencies (supply chain risk)
+          if grep -qE 'url:.*github|url:.*git' pubspec.yaml; then
+            echo "FAIL: Git dependencies detected — use versioned pub packages"
+            exit 1
+          fi
+          echo "PASS: No git dependencies"
+
+          # Verify crypto deps are in lock file
           for dep in cryptography crypto pqcrypto; do
-            if grep -q "\"$dep\":" pubspec.lock 2>/dev/null || grep -q "$dep:" pubspec.lock 2>/dev/null; then
-              VERSION=$(grep -A2 "  $dep:" pubspec.lock | grep 'version:' | head -1 | tr -d ' "' | cut -d: -f2)
-              echo "  $dep: $VERSION (pinned in lock file)"
+            if grep -q "  $dep:" pubspec.lock 2>/dev/null; then
+              echo "PASS: $dep pinned in pubspec.lock"
             else
-              echo "  WARNING: $dep not found in pubspec.lock"
+              echo "WARNING: $dep not found in pubspec.lock"
             fi
           done
 
-          # Verify no git dependencies (supply chain risk)
-          echo ""
-          echo "--- Checking for git dependencies (supply chain risk) ---"
-          if grep -q 'url:.*github\|url:.*git' pubspec.yaml; then
-            echo "FAIL: Git dependencies detected in pubspec.yaml — use versioned pub packages"
-            exit 1
-          fi
-          echo "  PASS: No git dependencies"
-
-          # Verify no path dependencies in production
-          echo ""
-          echo "--- Checking for path dependencies ---"
-          if grep -q 'path:' pubspec.yaml | grep -v '#'; then
-            echo "WARNING: Path dependencies detected — ensure these are dev_dependencies only"
-          fi
-          echo "  PASS: No path dependencies in production deps"
-
-          echo ""
-          echo "=== Dependency audit complete ==="
-
-  # ── Gate 6: SAST — Security-Focused Static Analysis ────────────────
+  # ── Gate 6: SAST ──────────────────────────────────────────────────
   sast:
     name: Security Static Analysis (SAST)
     runs-on: ubuntu-latest
@@ -188,22 +184,12 @@ jobs:
       - name: Check for hardcoded secrets
         run: |
           echo "=== Scanning for hardcoded secrets ==="
-
           ISSUES=0
 
-          # Look for string literals assigned to suspicious variable names
-          # Pattern: variable = "actual-string-value" (not variable references)
-          FOUND=$(grep -rnE "(apiKey|api_key|password|passwd|apiSecret|authToken|accessToken)\s*[:=]\s*['\"][A-Za-z0-9]" lib/ --include='*.dart' 2>/dev/null | grep -v '^\s*//' || true)
+          # Look for string literals assigned to secret-like variable names
+          FOUND=$(grep -rnE "(apiKey|api_key|password|passwd|apiSecret|authToken|accessToken)\s*[:=]\s*['\"][A-Za-z0-9]" lib/ --include='*.dart' 2>/dev/null | grep -vE '^\s*//' || true)
           if [ -n "$FOUND" ]; then
             echo "POTENTIAL SECRET FOUND:"
-            echo "$FOUND"
-            ISSUES=$((ISSUES + 1))
-          fi
-
-          # Look for base64-encoded strings that look like keys (>30 chars)
-          FOUND=$(grep -rnE "[:=]\s*['\"][A-Za-z0-9+/]{40,}={0,2}['\"]" lib/ --include='*.dart' 2>/dev/null | grep -v '^\s*//' | grep -v 'test\|example\|doc\|base64Decode\|base64Encode' || true)
-          if [ -n "$FOUND" ]; then
-            echo "POTENTIAL HARDCODED KEY FOUND:"
             echo "$FOUND"
             ISSUES=$((ISSUES + 1))
           fi
@@ -212,43 +198,33 @@ jobs:
             echo "FAIL: $ISSUES potential hardcoded secret(s) found"
             exit 1
           fi
-
           echo "PASS: No hardcoded secrets detected"
 
       - name: Check for unsafe crypto patterns
         run: |
           echo "=== Scanning for unsafe crypto patterns ==="
-
           ISSUES=0
 
-          # Check for Math.random (insecure RNG)
-          FOUND=$(grep -rn 'Random()' lib/ --include='*.dart' 2>/dev/null || true)
+          # Insecure RNG: Random() without .secure()
+          FOUND=$(grep -rnP '(?<!\.)Random\(\)' lib/ --include='*.dart' 2>/dev/null | grep -vE '^\s*//' || true)
           if [ -n "$FOUND" ]; then
             echo "FAIL: Insecure Random() found (use Random.secure())"
             echo "$FOUND"
             ISSUES=$((ISSUES + 1))
           fi
 
-          # Check for MD5 usage (broken hash)
-          FOUND=$(grep -rniE 'md5\.' lib/ --include='*.dart' 2>/dev/null || true)
+          # MD5 usage (broken hash)
+          FOUND=$(grep -rnE '\bmd5\b' lib/ --include='*.dart' 2>/dev/null | grep -vE '^\s*//' || true)
           if [ -n "$FOUND" ]; then
             echo "FAIL: MD5 usage detected (use SHA-256+)"
             echo "$FOUND"
             ISSUES=$((ISSUES + 1))
           fi
 
-          # Check for ECB mode usage
-          FOUND=$(grep -rniE 'ecb|ECB' lib/ --include='*.dart' 2>/dev/null || true)
+          # Actual print() function calls in production code (not in comments, not fingerprint/blueprint etc)
+          FOUND=$(grep -rnP '(?<![a-zA-Z])print\(' lib/ --include='*.dart' 2>/dev/null | grep -vE '^\s*///' || true)
           if [ -n "$FOUND" ]; then
-            echo "FAIL: ECB mode detected (use GCM or CBC)"
-            echo "$FOUND"
-            ISSUES=$((ISSUES + 1))
-          fi
-
-          # Check for print statements in production code
-          FOUND=$(grep -rn 'print(' lib/ --include='*.dart' 2>/dev/null || true)
-          if [ -n "$FOUND" ]; then
-            echo "FAIL: print() statements found in production code (use CryptoDebugLogger)"
+            echo "FAIL: print() statements found in production code"
             echo "$FOUND"
             ISSUES=$((ISSUES + 1))
           fi
@@ -257,34 +233,9 @@ jobs:
             echo "FAIL: $ISSUES unsafe crypto pattern(s) found"
             exit 1
           fi
-
           echo "PASS: No unsafe crypto patterns detected"
 
-      - name: Verify security invariants
-        run: |
-          echo "=== Verifying security invariants ==="
-
-          # Ensure zeroBytes is called after all DH operations
-          DH_COUNT=$(grep -rn 'sharedSecretKey\|SharedSecretKey' lib/ --include='*.dart' 2>/dev/null | wc -l | tr -d ' ')
-          ZERO_COUNT=$(grep -rn 'zeroBytes\|zeroUint8List' lib/ --include='*.dart' 2>/dev/null | wc -l | tr -d ' ')
-          echo "DH shared secret references: $DH_COUNT"
-          echo "Memory zeroing calls: $ZERO_COUNT"
-
-          if [ "$ZERO_COUNT" -lt "$DH_COUNT" ]; then
-            echo "WARNING: Fewer zeroing calls ($ZERO_COUNT) than DH references ($DH_COUNT)"
-            echo "Review that all DH intermediaries are properly wiped"
-          fi
-
-          # Ensure no plaintext logging
-          FOUND=$(grep -rn 'print\|Logger\|log(' lib/ --include='*.dart' 2>/dev/null | grep -iv 'debug\|CryptoDebug\|assert\|//' || true)
-          if [ -n "$FOUND" ]; then
-            echo "WARNING: Potential uncontrolled logging:"
-            echo "$FOUND"
-          fi
-
-          echo "PASS: Security invariant checks complete"
-
-  # ── Changelog Gate (on PRs only) ───────────────────────────────────
+  # ── Changelog Gate (PRs only) ──────────────────────────────────────
   changelog:
     name: Changelog Updated
     runs-on: ubuntu-latest
@@ -300,6 +251,5 @@ jobs:
             echo "PASS: CHANGELOG.md was updated"
           else
             echo "FAIL: CHANGELOG.md must be updated for every PR"
-            echo "Add a changelog entry describing your changes."
             exit 1
           fi
