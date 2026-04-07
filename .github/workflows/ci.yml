@@ -221,8 +221,9 @@ jobs:
             ISSUES=$((ISSUES + 1))
           fi
 
-          # Actual print() function calls in production code (not in comments, not fingerprint/blueprint etc)
-          FOUND=$(grep -rnP '(?<![a-zA-Z])print\(' lib/ --include='*.dart' 2>/dev/null | grep -vE '^\s*///' || true)
+          # Actual print() calls in production code
+          # Exclude: doc comments (///), fingerprint/imprint/sprint variable names
+          FOUND=$(grep -rn 'print(' lib/ --include='*.dart' 2>/dev/null | grep -v '///' | grep -vi 'fingerprint\|imprint\|sprint\|blueprint\|footprint' || true)
           if [ -n "$FOUND" ]; then
             echo "FAIL: print() statements found in production code"
             echo "$FOUND"
