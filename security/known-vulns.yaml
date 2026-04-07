@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Known Vulnerabilities Exception File
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# This file lists known vulnerabilities that have been reviewed and accepted.
+# Each entry MUST have:
+#   - id:      The CVE/GHSA/OSV identifier
+#   - package: The affected package name
+#   - reason:  Why this is acceptable (e.g., not exploitable in our context)
+#   - expires: Date when this exception must be re-reviewed (max 90 days)
+#   - reviewer: Who reviewed and approved the exception
+#
+# Expired exceptions are treated as failures in CI.
+# Review ALL exceptions on the 1st of each month.
+#
+# Format:
+#   exceptions:
+#     - id: "GHSA-xxxx-xxxx-xxxx"
+#       package: "package_name"
+#       reason: "Brief explanation of why this is acceptable"
+#       expires: "2026-07-07"
+#       reviewer: "github_username"
+# ─────────────────────────────────────────────────────────────────────────────
+
+exceptions: []
+
+# ── Policy ──────────────────────────────────────────────────────────────────
+#
+# 1. Critical/High severity vulnerabilities in crypto dependencies (cryptography,
+#    crypto, pqcrypto) are NEVER eligible for exception. Fix immediately.
+#
+# 2. Medium severity vulnerabilities may be excepted for up to 90 days if:
+#    - The vulnerability is not exploitable in our usage pattern
+#    - A fix is pending upstream
+#    - The reviewer documents the mitigation
+#
+# 3. Low severity vulnerabilities may be excepted for up to 90 days.
+#
+# 4. Exceptions in dev_dependencies are allowed for up to 90 days regardless
+#    of severity, as they don't ship in production builds.
+#
+# 5. All exceptions must be re-reviewed before their expiry date.
+#    Expired exceptions cause CI to fail.

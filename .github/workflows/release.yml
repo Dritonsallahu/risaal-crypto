@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  # ── Gate: All CI Checks Must Pass ────────────────────────────────────────
+  ci-check:
+    name: Verify CI Status
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches pubspec.yaml version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //')
+          echo "Tag version:    $TAG"
+          echo "Pubspec version: $PUBSPEC_VERSION"
+          if [ "$TAG" != "$PUBSPEC_VERSION" ]; then
+            echo "FAIL: Tag v$TAG does not match pubspec.yaml version $PUBSPEC_VERSION"
+            exit 1
+          fi
+          echo "PASS: Versions match"
+
+      - name: Verify CHANGELOG has entry for this version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          if grep -q "\[$TAG\]" CHANGELOG.md; then
+            echo "PASS: CHANGELOG.md has entry for v$TAG"
+          else
+            echo "FAIL: CHANGELOG.md missing entry for v$TAG"
+            exit 1
+          fi
+
+  # ── Build + Test ─────────────────────────────────────────────────────────
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs: [ci-check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --fatal-warnings --no-fatal-infos
+
+      - name: Run all tests
+        run: flutter test --coverage
+
+      - name: Run adversarial tests
+        run: |
+          flutter test test/adversarial_crypto_test.dart -r expanded
+          flutter test test/fuzz_test.dart -r expanded
+          flutter test test/memory_hygiene_test.dart -r expanded
+          flutter test test/test_vectors_test.dart -r expanded
+
+  # ── Create Signed Release ────────────────────────────────────────────────
+  release:
+    name: Create Signed Release
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract text between this version header and the next version header
+          NOTES=$(awk "/^## \[$VERSION\]/{found=1; next} /^## \[/{if(found) exit} found" CHANGELOG.md)
+          # Use delimiter for multiline output
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create source archive
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git archive --format=tar.gz --prefix="risaal_crypto-$VERSION/" \
+            -o "risaal_crypto-$VERSION.tar.gz" HEAD
+          git archive --format=zip --prefix="risaal_crypto-$VERSION/" \
+            -o "risaal_crypto-$VERSION.zip" HEAD
+
+      - name: Generate SHA256SUMS
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sha256sum \
+            "risaal_crypto-$VERSION.tar.gz" \
+            "risaal_crypto-$VERSION.zip" \
+            > SHA256SUMS
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
+
+      - name: Generate attestation for source archive
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            risaal_crypto-${{ steps.version.outputs.version }}.tar.gz
+            risaal_crypto-${{ steps.version.outputs.version }}.zip
+            SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.version.outputs.version }}"
+          body: |
+            ## risaal_crypto v${{ steps.version.outputs.version }}
+
+            ${{ steps.changelog.outputs.notes }}
+
+            ---
+
+            ### Verification
+
+            ```bash
+            # Verify checksums
+            sha256sum -c SHA256SUMS
+
+            # Verify GitHub attestation
+            gh attestation verify risaal_crypto-${{ steps.version.outputs.version }}.tar.gz --repo ${{ github.repository }}
+            ```
+
+            ### Security
+
+            - All CI gates passed (analyze, format, tests, adversarial, SAST, dependency audit)
+            - Coverage thresholds met (85% global, 95% critical crypto files)
+            - Build provenance attestation attached
+          files: |
+            risaal_crypto-${{ steps.version.outputs.version }}.tar.gz
+            risaal_crypto-${{ steps.version.outputs.version }}.zip
+            SHA256SUMS
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Publish to pub.dev ───────────────────────────────────────────────────
+  publish:
+    name: Publish to pub.dev
+    runs-on: ubuntu-latest
+    needs: [release]
+    # Only publish stable releases (no pre-release tags)
+    if: ${{ !contains(github.ref, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Dry-run publish
+        run: flutter pub publish --dry-run
+
+      - name: Publish
+        run: flutter pub publish --force
+        env:
+          PUB_TOKEN: ${{ secrets.PUB_TOKEN }}

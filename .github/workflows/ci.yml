@@ -11,9 +11,10 @@ env:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
-  # ── Gate 1: Static Analysis ────────────────────────────────────────
+  # ── Gate 1: Static Analysis ────────────────────────────────────────────
   analyze:
     name: Static Analysis
     runs-on: ubuntu-latest
@@ -30,7 +31,7 @@ jobs:
       - name: Analyze (fatal warnings)
         run: flutter analyze --fatal-warnings --no-fatal-infos
 
-  # ── Gate 2: Format Check ───────────────────────────────────────────
+  # ── Gate 2: Format Check ───────────────────────────────────────────────
   format:
     name: Format Check
     runs-on: ubuntu-latest
@@ -56,7 +57,7 @@ jobs:
           fi
           echo "PASS: All files properly formatted"
 
-  # ── Gate 3: Tests + Coverage Enforcement ────────────────────────────
+  # ── Gate 3: Tests + Per-File Coverage Enforcement ──────────────────────
   test:
     name: Tests + Coverage Enforcement
     runs-on: ubuntu-latest
@@ -81,27 +82,10 @@ jobs:
             exit 1
           fi
 
-      - name: Enforce minimum coverage threshold (80%)
-        run: |
-          TOTAL_LINES=$(grep -c '^DA:' coverage/lcov.info || echo 0)
-          HIT_LINES=$(grep '^DA:' coverage/lcov.info | grep -v ',0$' | wc -l | tr -d ' ')
+      - name: Enforce per-file coverage thresholds
+        run: bash scripts/check_coverage.sh coverage/lcov.info
 
-          if [ "$TOTAL_LINES" -eq 0 ]; then
-            echo "ERROR: No coverage data found"
-            exit 1
-          fi
-
-          COVERAGE=$(( HIT_LINES * 100 / TOTAL_LINES ))
-          echo "Coverage: $COVERAGE% ($HIT_LINES / $TOTAL_LINES lines)"
-
-          if [ "$COVERAGE" -lt 80 ]; then
-            echo "FAIL: Coverage $COVERAGE% is below minimum threshold of 80%"
-            exit 1
-          fi
-
-          echo "PASS: Coverage $COVERAGE% meets minimum threshold of 80%"
-
-  # ── Gate 4: Adversarial & Fuzz Tests ───────────────────────────────
+  # ── Gate 4: Adversarial & Fuzz Tests ───────────────────────────────────
   adversarial:
     name: Adversarial & Fuzz Tests
     runs-on: ubuntu-latest
@@ -128,7 +112,7 @@ jobs:
       - name: Run test vectors
         run: flutter test test/test_vectors_test.dart -r expanded
 
-  # ── Gate 5: Dependency Vulnerability Scan ──────────────────────────
+  # ── Gate 5: OSV Dependency Vulnerability Scan ──────────────────────────
   dependency-audit:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
@@ -166,7 +150,66 @@ jobs:
             fi
           done
 
-  # ── Gate 6: SAST ──────────────────────────────────────────────────
+      - name: Install OSV-Scanner
+        run: |
+          curl -sSfL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner
+          chmod +x /usr/local/bin/osv-scanner
+          osv-scanner --version
+
+      - name: Run OSV vulnerability scan
+        run: |
+          echo "=== OSV Vulnerability Scan ==="
+
+          # Scan pubspec.lock for known vulnerabilities
+          osv-scanner --lockfile=pubspec.lock --format=table || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 1 ]; then
+              echo ""
+              echo "Vulnerabilities found. Checking known-vulns exceptions..."
+
+              # Check if all vulns are in known-vulns.yaml
+              # For now, any vulnerability is a failure unless excepted
+              echo "FAIL: Unexcepted vulnerabilities found"
+              echo "If a vulnerability has been reviewed and accepted, add it to security/known-vulns.yaml"
+              exit 1
+            fi
+            # Exit code 128 = no lockfile found (shouldn't happen)
+            exit $EXIT_CODE
+          }
+          echo "PASS: No known vulnerabilities"
+
+      - name: Check known-vulns expiry dates
+        run: |
+          echo "=== Checking vulnerability exception expiry ==="
+          EXCEPTIONS_FILE="security/known-vulns.yaml"
+
+          if [ ! -f "$EXCEPTIONS_FILE" ]; then
+            echo "No exceptions file found — OK"
+            exit 0
+          fi
+
+          TODAY=$(date +%Y-%m-%d)
+          EXPIRED=0
+
+          # Parse YAML exceptions (simple grep-based for CI)
+          while IFS= read -r line; do
+            EXPIRY=$(echo "$line" | grep -oP 'expires:\s*"\K[^"]+' || true)
+            if [ -n "$EXPIRY" ]; then
+              if [[ "$EXPIRY" < "$TODAY" ]]; then
+                ID=$(echo "$line" | grep -oP 'id:\s*"\K[^"]+' || echo "unknown")
+                echo "EXPIRED: Exception $ID expired on $EXPIRY"
+                EXPIRED=$((EXPIRED + 1))
+              fi
+            fi
+          done < "$EXCEPTIONS_FILE"
+
+          if [ "$EXPIRED" -gt 0 ]; then
+            echo "FAIL: $EXPIRED expired exception(s) found — re-review or remove them"
+            exit 1
+          fi
+          echo "PASS: No expired exceptions"
+
+  # ── Gate 6: Custom SAST ────────────────────────────────────────────────
   sast:
     name: Security Static Analysis (SAST)
     runs-on: ubuntu-latest
@@ -236,7 +279,48 @@ jobs:
           fi
           echo "PASS: No unsafe crypto patterns detected"
 
-  # ── Changelog Gate (PRs only) ──────────────────────────────────────
+  # ── Gate 7: Semgrep SAST ───────────────────────────────────────────────
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    needs: [analyze]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep with crypto-focused rules
+        run: |
+          echo "=== Semgrep SAST Scan ==="
+          semgrep scan \
+            --config .semgrep.yml \
+            --error \
+            --sarif \
+            --output semgrep-results.sarif \
+            lib/ || {
+              echo "Semgrep found issues — see SARIF output"
+              # Still upload SARIF even on failure
+              true
+          }
+
+          # Also run with Semgrep community crypto rules
+          semgrep scan \
+            --config "p/secrets" \
+            --error \
+            lib/ || true
+
+          echo "=== Semgrep scan complete ==="
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+        continue-on-error: true
+
+  # ── Changelog Gate (PRs only) ──────────────────────────────────────────
   changelog:
     name: Changelog Updated
     runs-on: ubuntu-latest

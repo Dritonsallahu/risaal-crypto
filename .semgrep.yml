@@ -1,0 +1,162 @@
+rules:
+  # ── Insecure Random ─────────────────────────────────────────────────────
+  - id: insecure-random
+    patterns:
+      - pattern: Random()
+      - pattern-not: Random.secure()
+    message: >
+      Insecure Random() detected. Use Random.secure() for all cryptographic
+      operations. dart:math Random() uses a predictable PRNG that is trivially
+      reversible.
+    languages: [dart]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: cryptography
+      cwe: "CWE-338: Use of Cryptographically Weak PRNG"
+
+  # ── MD5 Usage ───────────────────────────────────────────────────────────
+  - id: md5-usage
+    pattern: md5
+    message: >
+      MD5 is cryptographically broken. Use SHA-256 or SHA-512 via the crypto
+      package. MD5 is vulnerable to collision attacks (2^18 complexity).
+    languages: [dart]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: cryptography
+      cwe: "CWE-328: Use of Weak Hash"
+
+  # ── SHA-1 Usage ─────────────────────────────────────────────────────────
+  - id: sha1-usage
+    pattern: sha1
+    message: >
+      SHA-1 is deprecated for security use. Use SHA-256 or SHA-512.
+      SHA-1 has practical collision attacks (SHAttered, 2017).
+    languages: [dart]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: cryptography
+      cwe: "CWE-328: Use of Weak Hash"
+
+  # ── Hardcoded Secrets ───────────────────────────────────────────────────
+  - id: hardcoded-secret
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $VAR = "..."
+          - pattern: |
+              $VAR = '...'
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (apiKey|api_key|password|passwd|secret|token|authToken|accessToken|privateKey|private_key)
+    message: >
+      Potential hardcoded secret assigned to variable '$VAR'. Use secure
+      storage or environment variables instead.
+    languages: [dart]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: secrets
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  # ── Print in Production ─────────────────────────────────────────────────
+  - id: print-in-production
+    pattern: print(...)
+    paths:
+      include:
+        - lib/
+      exclude:
+        - lib/src/crypto_debug_logger.dart
+    message: >
+      print() in production code leaks information. Use CryptoDebugLogger
+      which is stripped in release builds.
+    languages: [dart]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: information-disclosure
+      cwe: "CWE-532: Information Exposure Through Log Files"
+
+  # ── ECB Mode ────────────────────────────────────────────────────────────
+  - id: ecb-mode
+    pattern-either:
+      - pattern: AesEcb
+      - pattern: ecb
+    message: >
+      ECB mode is insecure — identical plaintext blocks produce identical
+      ciphertext blocks. Use AES-GCM (authenticated encryption).
+    languages: [dart]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: cryptography
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+
+  # ── CBC Without Authentication ──────────────────────────────────────────
+  - id: cbc-without-auth
+    pattern: AesCbc
+    message: >
+      AES-CBC without authentication is vulnerable to padding oracle attacks.
+      Use AES-GCM which provides authenticated encryption.
+    languages: [dart]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: cryptography
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+
+  # ── Static IV/Nonce ─────────────────────────────────────────────────────
+  - id: static-iv-nonce
+    patterns:
+      - pattern-either:
+          - pattern: |
+              nonce: Uint8List.fromList([...])
+          - pattern: |
+              iv: Uint8List.fromList([...])
+    message: >
+      Static IV/nonce detected. Nonces MUST be unique per encryption
+      operation. Use random nonces from Random.secure().
+    languages: [dart]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: cryptography
+      cwe: "CWE-329: Not Using an Unpredictable IV with CBC Mode"
+
+  # ── Key Material in String ──────────────────────────────────────────────
+  - id: key-in-string
+    patterns:
+      - pattern: base64Decode(...)
+      - metavariable-regex:
+          metavariable: $...ARGS
+          regex: .*(key|secret|private).*
+    message: >
+      Decoding key material from a base64 string literal is a code smell.
+      Keys should come from secure storage, not hardcoded strings.
+    languages: [dart]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: secrets
+
+  # ── Unsafe Deserialization ──────────────────────────────────────────────
+  - id: unsafe-json-decode
+    patterns:
+      - pattern: jsonDecode($INPUT)
+      - pattern-not-inside: |
+          try { ... } catch(...) { ... }
+    message: >
+      jsonDecode without try/catch. Malformed JSON from untrusted sources
+      can crash the application. Always wrap in try/catch.
+    languages: [dart]
+    severity: WARNING
+    paths:
+      include:
+        - lib/
+    metadata:
+      category: security
+      subcategory: input-validation
+      cwe: "CWE-502: Deserialization of Untrusted Data"

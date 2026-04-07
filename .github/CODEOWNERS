@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CODEOWNERS — risaal_crypto
+#
+# PRs modifying these paths require review from the listed owners.
+# See docs/security/BRANCH_PROTECTION.md for the full policy.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Default owner for all files
+* @Dritonsallahu
+
+# Critical crypto files — require explicit review
+lib/src/x3dh.dart @Dritonsallahu
+lib/src/double_ratchet.dart @Dritonsallahu
+lib/src/sender_key.dart @Dritonsallahu
+lib/src/sealed_sender.dart @Dritonsallahu
+lib/src/signal_protocol_manager.dart @Dritonsallahu
+lib/src/secure_memory.dart @Dritonsallahu
+lib/src/key_helper.dart @Dritonsallahu
+
+# CI and build configuration
+.github/workflows/** @Dritonsallahu
+scripts/** @Dritonsallahu
+.semgrep.yml @Dritonsallahu
+
+# Security documentation
+SECURITY.md @Dritonsallahu
+docs/security/** @Dritonsallahu
+security/** @Dritonsallahu

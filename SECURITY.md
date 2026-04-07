@@ -163,9 +163,23 @@ Security-relevant changes are documented in `CHANGELOG.md` with a `[SECURITY]` p
 
 ## Related Documentation
 
+### Core Security Docs
 - **[docs/MEMORY_SAFETY.md](docs/MEMORY_SAFETY.md)** — Complete memory safety model, Dart GC constraints, FFI mitigations, residual risks
 - **[docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md)** — Key compromise playbook, protocol bug response, coordinated disclosure
 - **[docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md)** — Production telemetry integration, release signing controls, incident drill procedures
 - **[docs/AUDIT_SCOPE.md](docs/AUDIT_SCOPE.md)** — Scope document for third-party security audit
+
+### Operational Security
+- **[docs/security/SLO_DEFINITIONS.md](docs/security/SLO_DEFINITIONS.md)** — Stability and security SLOs with measurement methodology and breach escalation
+- **[docs/security/TELEMETRY_INTEGRATION.md](docs/security/TELEMETRY_INTEGRATION.md)** — Privacy-safe telemetry architecture, client/server integration, alert rules
+- **[docs/security/CANARY_DEPLOYMENT.md](docs/security/CANARY_DEPLOYMENT.md)** — 4-stage canary rollout strategy with statistical comparison and rollback triggers
+- **[docs/security/BRANCH_PROTECTION.md](docs/security/BRANCH_PROTECTION.md)** — Branch protection policy, CODEOWNERS, CI gate requirements
+
+### Security Runbooks
+- **[docs/security/runbook-key-compromise.md](docs/security/runbook-key-compromise.md)** — Key compromise detection, triage, containment, and recovery
+- **[docs/security/runbook-replay-spike.md](docs/security/runbook-replay-spike.md)** — Replay attack spike diagnosis and response
+- **[docs/security/runbook-session-reset-storm.md](docs/security/runbook-session-reset-storm.md)** — Mass session reset diagnosis and containment
+- **[docs/security/runbook-critical-dependency-cve.md](docs/security/runbook-critical-dependency-cve.md)** — Critical dependency vulnerability response
+- **[docs/security/INCIDENT_DRILL_PROCEDURES.md](docs/security/INCIDENT_DRILL_PROCEDURES.md)** — Monthly/quarterly/annual drill schedule and evaluation criteria
 
 Thank you for helping keep Risaal secure.
