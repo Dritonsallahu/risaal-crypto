@@ -20,6 +20,26 @@ class SessionResetError implements Exception {
       'Original: $originalError';
 }
 
+/// Thrown when a peer's security capabilities downgraded (e.g. PQXDH → classical).
+///
+/// This indicates a possible MITM stripping the post-quantum layer. The caller
+/// should present the user with a warning and only proceed if they explicitly
+/// confirm via [PqxdhPolicy.classicalOnly].
+class PqxdhDowngradeError implements Exception {
+  final String userId;
+  final String deviceId;
+
+  const PqxdhDowngradeError({
+    required this.userId,
+    required this.deviceId,
+  });
+
+  @override
+  String toString() =>
+      'PqxdhDowngradeError: Peer $userId:$deviceId previously supported PQXDH '
+      'but new bundle lacks Kyber key. Possible downgrade attack.';
+}
+
 /// Thrown when a session has been flagged as unstable (too many resets).
 ///
 /// Auto-reset is disabled for this session pair. The user should update

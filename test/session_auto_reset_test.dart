@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:risaal_crypto/src/crypto_storage.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
+import 'package:risaal_crypto/src/security_event_bus.dart';
 import 'package:risaal_crypto/src/session_reset_errors.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 
@@ -577,6 +578,360 @@ void main() {
       }
 
       expect(callbackFired, isTrue);
+    });
+  });
+
+  // ── PqxdhDowngradeError model tests ──────────────────────────────────
+
+  group('PqxdhDowngradeError', () {
+    test('toString includes peer info', () {
+      const error = PqxdhDowngradeError(
+        userId: 'user123',
+        deviceId: 'device456',
+      );
+
+      expect(error.toString(), contains('user123'));
+      expect(error.toString(), contains('device456'));
+      expect(error.toString(), contains('PQXDH'));
+      expect(error.toString(), contains('downgrade'));
+    });
+
+    test('implements Exception', () {
+      const error = PqxdhDowngradeError(userId: 'u', deviceId: 'd');
+      expect(error, isA<Exception>());
+    });
+  });
+
+  // ── Anti-downgrade enforcement ──────────────────────────────────────
+
+  group('PQXDH anti-downgrade enforcement', () {
+    test('blocks session when peer previously supported PQXDH but now lacks it',
+        () async {
+      final aliceStorage = FakeSecureStorage();
+      final bobStorage = FakeSecureStorage();
+      final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.initialize();
+      await bob.initialize();
+
+      await aliceStorage.write(key: 'user_id', value: 'alice-id');
+      await aliceStorage.write(key: 'device_id', value: 'alice-device');
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobStorage.write(key: 'device_id', value: 'bob-device');
+
+      // First session: Bob has PQXDH support (Kyber key present)
+      final bobBundle1 = await bob.generateKeyBundle();
+      final bundle1 = _bundleFromMap(
+        bobBundle1,
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
+      expect(bundle1.kyberPreKey, isNotNull, reason: 'Bob should have Kyber');
+
+      // Alice creates session — records Bob as PQXDH-capable
+      await alice.createSession(bundle1);
+
+      // Second session: Simulate Bob's bundle WITHOUT Kyber key (downgrade)
+      final bobBundle2 = await bob.generateKeyBundle();
+      final bundleNoKyber = PreKeyBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+        identityKey: bobBundle2['identityKey'] as String,
+        identitySigningKey: bobBundle2['identitySigningKey'] as String,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
+          signature: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['signature'] as String,
+        ),
+        oneTimePreKey: null,
+        kyberPreKey: null, // Kyber stripped — downgrade
+      );
+
+      // Should throw PqxdhDowngradeError
+      expect(
+        () => alice.createSession(bundleNoKyber),
+        throwsA(isA<PqxdhDowngradeError>()),
+      );
+    });
+
+    test('allows session with classicalOnly override after downgrade',
+        () async {
+      final aliceStorage = FakeSecureStorage();
+      final bobStorage = FakeSecureStorage();
+      final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.initialize();
+      await bob.initialize();
+
+      await aliceStorage.write(key: 'user_id', value: 'alice-id');
+      await aliceStorage.write(key: 'device_id', value: 'alice-device');
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobStorage.write(key: 'device_id', value: 'bob-device');
+
+      // First session with PQXDH
+      final bobBundle1 = await bob.generateKeyBundle();
+      final bundle1 = _bundleFromMap(
+        bobBundle1,
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
+      await alice.createSession(bundle1);
+
+      // Simulate downgraded bundle
+      final bobBundle2 = await bob.generateKeyBundle();
+      final bundleNoKyber = PreKeyBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+        identityKey: bobBundle2['identityKey'] as String,
+        identitySigningKey: bobBundle2['identitySigningKey'] as String,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
+          signature: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['signature'] as String,
+        ),
+        oneTimePreKey: null,
+        kyberPreKey: null,
+      );
+
+      // Explicit classicalOnly override — should succeed (user confirmed)
+      await alice.createSession(
+        bundleNoKyber,
+        pqxdhPolicy: PqxdhPolicy.classicalOnly,
+      );
+
+      // Verify session works
+      final envelope =
+          await alice.encryptMessage('bob-id', 'bob-device', 'Hello!');
+      expect(envelope, isNotNull);
+    });
+
+    test('emits antiDowngradeTriggered event before throwing', () async {
+      final aliceStorage = FakeSecureStorage();
+      final bobStorage = FakeSecureStorage();
+      final eventBus = SecurityEventBus();
+      final alice = SignalProtocolManager(
+        secureStorage: aliceStorage,
+        securityEventBus: eventBus,
+      );
+      final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.initialize();
+      await bob.initialize();
+
+      await aliceStorage.write(key: 'user_id', value: 'alice-id');
+      await aliceStorage.write(key: 'device_id', value: 'alice-device');
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobStorage.write(key: 'device_id', value: 'bob-device');
+
+      // First session with PQXDH
+      final bobBundle1 = await bob.generateKeyBundle();
+      await alice.createSession(
+        _bundleFromMap(bobBundle1, userId: 'bob-id', deviceId: 'bob-device'),
+      );
+
+      // Track events
+      SecurityEvent? downgradeEvent;
+      eventBus.events.listen((event) {
+        if (event.type == SecurityEventType.antiDowngradeTriggered) {
+          downgradeEvent = event;
+        }
+      });
+
+      // Downgraded bundle
+      final bobBundle2 = await bob.generateKeyBundle();
+      final bundleNoKyber = PreKeyBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+        identityKey: bobBundle2['identityKey'] as String,
+        identitySigningKey: bobBundle2['identitySigningKey'] as String,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
+          signature: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['signature'] as String,
+        ),
+        oneTimePreKey: null,
+        kyberPreKey: null,
+      );
+
+      try {
+        await alice.createSession(bundleNoKyber);
+      } on PqxdhDowngradeError {
+        // Expected
+      }
+
+      // Allow stream microtask to deliver the event
+      await Future<void>.delayed(Duration.zero);
+
+      expect(downgradeEvent, isNotNull);
+      expect(downgradeEvent!.metadata['previousPqxdh'], isTrue);
+      expect(downgradeEvent!.metadata['currentPqxdh'], isFalse);
+      expect(downgradeEvent!.metadata['action'], equals('session_refused'));
+    });
+
+    test('no downgrade error when peer never supported PQXDH', () async {
+      final aliceStorage = FakeSecureStorage();
+      final bobStorage = FakeSecureStorage();
+      final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.initialize();
+      await bob.initialize();
+
+      await aliceStorage.write(key: 'user_id', value: 'alice-id');
+      await aliceStorage.write(key: 'device_id', value: 'alice-device');
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobStorage.write(key: 'device_id', value: 'bob-device');
+
+      // First session without PQXDH (classical only)
+      final bobBundle = await bob.generateKeyBundle();
+      final bundleNoKyber = PreKeyBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+        identityKey: bobBundle['identityKey'] as String,
+        identitySigningKey: bobBundle['identitySigningKey'] as String,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: (bobBundle['signedPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle['signedPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
+          signature: (bobBundle['signedPreKey']
+              as Map<String, dynamic>)['signature'] as String,
+        ),
+        oneTimePreKey: null,
+        kyberPreKey: null,
+      );
+
+      // No previous capability recorded — should not throw
+      await alice.createSession(
+        bundleNoKyber,
+        pqxdhPolicy: PqxdhPolicy.classicalOnly,
+      );
+
+      // Second session also without PQXDH — still no downgrade
+      final bobBundle2 = await bob.generateKeyBundle();
+      final bundleNoKyber2 = PreKeyBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+        identityKey: bobBundle2['identityKey'] as String,
+        identitySigningKey: bobBundle2['identitySigningKey'] as String,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
+          signature: (bobBundle2['signedPreKey']
+              as Map<String, dynamic>)['signature'] as String,
+        ),
+        oneTimePreKey: null,
+        kyberPreKey: null,
+      );
+
+      // No error — peer never had PQXDH
+      await alice.createSession(
+        bundleNoKyber2,
+        pqxdhPolicy: PqxdhPolicy.classicalOnly,
+      );
+    });
+
+    test('no downgrade when peer upgrades from classical to PQXDH', () async {
+      final aliceStorage = FakeSecureStorage();
+      final bobStorage = FakeSecureStorage();
+      final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.initialize();
+      await bob.initialize();
+
+      await aliceStorage.write(key: 'user_id', value: 'alice-id');
+      await aliceStorage.write(key: 'device_id', value: 'alice-device');
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobStorage.write(key: 'device_id', value: 'bob-device');
+
+      // First session: classical only (no Kyber)
+      final bobBundle = await bob.generateKeyBundle();
+      final bundleNoKyber = PreKeyBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+        identityKey: bobBundle['identityKey'] as String,
+        identitySigningKey: bobBundle['identitySigningKey'] as String,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: (bobBundle['signedPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle['signedPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
+          signature: (bobBundle['signedPreKey']
+              as Map<String, dynamic>)['signature'] as String,
+        ),
+        oneTimePreKey: null,
+        kyberPreKey: null,
+      );
+
+      await alice.createSession(
+        bundleNoKyber,
+        pqxdhPolicy: PqxdhPolicy.classicalOnly,
+      );
+
+      // Second session: Bob now has PQXDH (upgrade — this is GOOD)
+      final bobBundle2 = await bob.generateKeyBundle();
+      final fullBundle = _bundleFromMap(
+        bobBundle2,
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
+
+      // Upgrade should succeed without error
+      await alice.createSession(fullBundle);
+    });
+  });
+
+  // ── Anti-replay persistence tests ──────────────────────────────────
+
+  group('anti-replay state persistence', () {
+    test('replay detected across session restore', () async {
+      final aliceStorage = FakeSecureStorage();
+      final bobStorage = FakeSecureStorage();
+      final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.initialize();
+      await bob.initialize();
+
+      await aliceStorage.write(key: 'user_id', value: 'alice-id');
+      await aliceStorage.write(key: 'device_id', value: 'alice-device');
+      await bobStorage.write(key: 'user_id', value: 'bob-id');
+      await bobStorage.write(key: 'device_id', value: 'bob-device');
+
+      // Establish session
+      final bobBundle = await bob.generateKeyBundle();
+      final bundle = _bundleFromMap(
+        bobBundle,
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
+      await alice.createSession(bundle);
+
+      final env = await alice.encryptMessage('bob-id', 'bob-device', 'Hello!');
+      await bob.decryptMessage('alice-id', 'alice-device', env);
+
+      // Send another message and save envelope for replay
+      final env2 =
+          await alice.encryptMessage('bob-id', 'bob-device', 'Second msg');
+      await bob.decryptMessage('alice-id', 'alice-device', env2);
+
+      // Simulate app restart — create new Bob instance with same storage
+      final bob2 = SignalProtocolManager(secureStorage: bobStorage);
+      await bob2.initialize();
+
+      // Replay env2 — should fail even after "restart" because state is persisted
+      expect(
+        () => bob2.decryptMessage('alice-id', 'alice-device', env2),
+        throwsA(anything),
+      );
     });
   });
 }

@@ -395,8 +395,8 @@ class SignalProtocolManager {
         pqxdhPolicy != PqxdhPolicy.classicalOnly) {
       CryptoDebugLogger.log(
         'X3DH',
-        'WARNING: Anti-downgrade — peer previously supported PQXDH '
-            'but new bundle has no Kyber key',
+        'BLOCKED: Anti-downgrade — peer previously supported PQXDH '
+            'but new bundle has no Kyber key. Session refused.',
       );
       _eventBus?.emitType(
         SecurityEventType.antiDowngradeTriggered,
@@ -408,7 +408,12 @@ class SignalProtocolManager {
           'previousPqxdh': true,
           'currentPqxdh': false,
           'reason': 'Peer Kyber key missing from new bundle',
+          'action': 'session_refused',
         },
+      );
+      throw PqxdhDowngradeError(
+        userId: recipientBundle.userId,
+        deviceId: recipientBundle.deviceId,
       );
     }
 
