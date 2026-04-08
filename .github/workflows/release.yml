@@ -115,7 +115,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Generate attestation for source archive
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             risaal_crypto-${{ steps.version.outputs.version }}.tar.gz
