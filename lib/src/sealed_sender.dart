@@ -275,7 +275,8 @@ class SealedSenderEnvelope {
     required KeyPair recipientIdentityKeyPair,
     Map<String, String>? knownSenderIdentityKeys,
     bool Function(String token)? validateServerToken,
-    int maxReplayWindowMs = 5 * 60 * 1000 + 30 * 1000, // 5min + 30s drift tolerance
+    int maxReplayWindowMs =
+        5 * 60 * 1000 + 30 * 1000, // 5min + 30s drift tolerance
     Set<String>? seenNonces,
   }) async {
     CryptoDebugLogger.log('SS_UNSEAL', 'Unsealing envelope...');

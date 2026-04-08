@@ -208,8 +208,7 @@ void main() {
           _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-d1');
       await alice.createSession(bundle);
 
-      final encrypted =
-          await alice.encryptMessage('bob-id', 'bob-d1', 'test');
+      final encrypted = await alice.encryptMessage('bob-id', 'bob-d1', 'test');
       await bob.decryptMessage('alice-id', 'alice-d1', encrypted);
 
       // Replay the same message — should throw (either StateError for
@@ -222,15 +221,16 @@ void main() {
 
     test('skippedKeyCapReached event type exists', () {
       expect(
-        SecurityEventType.values.contains(SecurityEventType.skippedKeyCapReached),
+        SecurityEventType.values
+            .contains(SecurityEventType.skippedKeyCapReached),
         isTrue,
       );
     });
 
     test('peerIdentityKeyChanged event type exists', () {
       expect(
-        SecurityEventType.values.contains(
-            SecurityEventType.peerIdentityKeyChanged),
+        SecurityEventType.values
+            .contains(SecurityEventType.peerIdentityKeyChanged),
         isTrue,
       );
     });
@@ -274,10 +274,8 @@ void main() {
       await cryptoStorage.savePeerIdentityKey('bob', 'device1', 'key-1');
       await cryptoStorage.savePeerIdentityKey('bob', 'device2', 'key-2');
 
-      expect(
-          await cryptoStorage.getPeerIdentityKey('bob', 'device1'), 'key-1');
-      expect(
-          await cryptoStorage.getPeerIdentityKey('bob', 'device2'), 'key-2');
+      expect(await cryptoStorage.getPeerIdentityKey('bob', 'device1'), 'key-1');
+      expect(await cryptoStorage.getPeerIdentityKey('bob', 'device2'), 'key-2');
     });
   });
 }

@@ -20,7 +20,8 @@ void main() {
       bus.dispose();
     });
 
-    test('emits anomaly on signature failure spike exceeding threshold', () async {
+    test('emits anomaly on signature failure spike exceeding threshold',
+        () async {
       detector = SecurityAnomalyDetector(
         eventBus: bus,
         signatureFailureThreshold: 3,
@@ -138,7 +139,8 @@ void main() {
       expect(anomalies.first.metadata['severity'], 'critical');
     });
 
-    test('resets window after anomaly fires to avoid repeated alerts', () async {
+    test('resets window after anomaly fires to avoid repeated alerts',
+        () async {
       detector = SecurityAnomalyDetector(
         eventBus: bus,
         signatureFailureThreshold: 2,
@@ -247,8 +249,8 @@ void main() {
       final before = DateTime.now();
       final event = SecurityEvent(type: SecurityEventType.sessionReset);
       final after = DateTime.now();
-      expect(event.timestamp.isAfter(before) || event.timestamp == before,
-          isTrue);
+      expect(
+          event.timestamp.isAfter(before) || event.timestamp == before, isTrue);
       expect(
           event.timestamp.isBefore(after) || event.timestamp == after, isTrue);
     });

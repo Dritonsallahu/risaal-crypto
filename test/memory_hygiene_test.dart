@@ -390,8 +390,7 @@ void main() {
       }
     });
 
-    test(
-        'zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
+    test('zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
         () async {
       // Same regression but for SenderKeyManager which also uses
       // SecretKey(List<int>.from(chainKey)) after the fix.

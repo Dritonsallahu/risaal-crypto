@@ -1360,8 +1360,7 @@ class SignalProtocolManager {
       );
     } catch (e) {
       final msg = e.toString();
-      if (msg.contains('nonce already seen') ||
-          msg.contains('replay window')) {
+      if (msg.contains('nonce already seen') || msg.contains('replay window')) {
         _eventBus?.emitType(
           SecurityEventType.replayRejected,
           metadata: {'source': 'sealed_sender', 'reason': msg},
