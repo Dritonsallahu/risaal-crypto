@@ -199,6 +199,36 @@ class CryptoStorage {
     await _secureStorage.delete(key: _keyPreviousKyberExpiry);
   }
 
+  // ── Peer Identity Key Tracking (reinstall / MITM detection) ───────
+
+  static const _keyPeerIdentityPrefix = 'crypto_peer_identity_';
+
+  String _peerIdentityKey(String userId, String deviceId) =>
+      '$_keyPeerIdentityPrefix${userId}_$deviceId';
+
+  /// Save the peer's identity public key for change detection.
+  Future<void> savePeerIdentityKey(
+    String userId,
+    String deviceId,
+    String identityPublicKey,
+  ) =>
+      _secureStorage.write(
+        key: _peerIdentityKey(userId, deviceId),
+        value: identityPublicKey,
+      );
+
+  /// Get the peer's previously stored identity public key.
+  /// Returns null if we've never stored a key for this peer.
+  Future<String?> getPeerIdentityKey(
+    String userId,
+    String deviceId,
+  ) =>
+      _secureStorage.read(key: _peerIdentityKey(userId, deviceId));
+
+  /// Delete the peer's stored identity key (e.g. on session deletion).
+  Future<void> deletePeerIdentityKey(String userId, String deviceId) =>
+      _secureStorage.delete(key: _peerIdentityKey(userId, deviceId));
+
   // ── Peer Capability Tracking (anti-downgrade) ─────────────────────
 
   String _peerCapKey(String userId, String deviceId) =>

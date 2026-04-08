@@ -14,7 +14,7 @@ import 'signal_keys.dart';
 ///   - **Root key**: Derived from X3DH shared secret, ratcheted with each DH step
 ///   - **Chain keys**: Derived from root key, ratcheted with each message
 ///   - **DH keys**: Generated fresh for each sending turn, received from peer
-///   - **Skipped keys**: Stored when messages arrive out-of-order (up to 100)
+///   - **Skipped keys**: Stored when messages arrive out-of-order (up to 2000)
 ///
 /// The state is JSON-serializable for storage via [CryptoStorage].
 ///

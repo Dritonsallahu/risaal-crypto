@@ -22,14 +22,24 @@ If you discover a security vulnerability in `risaal_crypto`, please report it re
 
 We take all security reports seriously and will acknowledge receipt within 72 hours.
 
+### Escalation for Active Attacks (P0)
+
+If a vulnerability is being **actively exploited**:
+
+1. **Email** security@risaal.org — include "P0 ACTIVE EXPLOIT" in subject
+2. **If no response within 2 hours:** escalate to hello@risaal.org
+3. **If vulnerability affects >1% of users:** trigger emergency patch release (bypass standard review, require single maintainer sign-off)
+4. **If key material is compromised server-side:** push remote key rotation to all clients immediately
+
 ## Supported Versions
 
 | Version | Supported          | Status |
 | ------- | ------------------ | ------ |
-| 0.1.x   | Yes                | Current |
+| 0.2.x   | Yes                | Current |
+| 0.1.x   | Security fixes only| Previous |
 | < 0.1   | No                 | Pre-release |
 
-Only the latest 0.1.x version receives security updates. Please upgrade to the latest version before reporting issues.
+Only the latest 0.2.x version receives full updates. 0.1.x receives critical security patches only. Please upgrade to the latest version before reporting issues.
 
 ## Threat Model
 
@@ -105,6 +115,17 @@ These invariants MUST hold at all times. Violations are security bugs:
 - **pqcrypto:** Experimental FFI bindings to liboqs; USE AT YOUR OWN RISK for post-quantum features
 
 We pin exact versions in `pubspec.lock` and review all dependency updates for security implications.
+
+### Dependency Patching Policy
+
+| Severity | SLA | Details |
+|----------|-----|---------|
+| P0 — Critical, actively exploited | 4h assess, 24h patch | Emergency bypass allowed |
+| P1 — Critical or crypto-relevant | 4h assess, 24h patch | All crypto deps (`cryptography`, `crypto`, `pqcrypto`) are P1 minimum |
+| P2 — High, exploitable in context | 7 days | Standard PR workflow |
+| P3 — Medium/Low | Next release cycle | Standard PR workflow |
+
+**Blanket rule:** All security-relevant dependency patches MUST ship within 72 hours of a fix being available. See `docs/security/runbook-critical-dependency-cve.md` for the full response playbook.
 
 ## Known Limitations
 

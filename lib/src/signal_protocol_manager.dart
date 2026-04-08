@@ -137,6 +137,12 @@ class SignalProtocolManager {
   /// Number of one-time pre-keys to auto-generate when pool is low.
   static const int otpReplenishBatchSize = 100;
 
+  /// Grace period for key expiry checks to tolerate device clock drift.
+  /// If a key appears expired by less than this amount, it's still treated
+  /// as valid. This prevents false expirations on devices with slightly
+  /// fast clocks.
+  static const Duration clockDriftGracePeriod = Duration(hours: 1);
+
   SignalProtocolManager({
     required CryptoSecureStorage secureStorage,
     SecurityEventBus? securityEventBus,
@@ -395,8 +401,8 @@ class SignalProtocolManager {
         pqxdhPolicy != PqxdhPolicy.classicalOnly) {
       CryptoDebugLogger.log(
         'X3DH',
-        'WARNING: Anti-downgrade — peer previously supported PQXDH '
-            'but new bundle has no Kyber key',
+        'BLOCKED: Anti-downgrade — peer previously supported PQXDH '
+            'but new bundle has no Kyber key. Session refused.',
       );
       _eventBus?.emitType(
         SecurityEventType.antiDowngradeTriggered,
@@ -408,21 +414,71 @@ class SignalProtocolManager {
           'previousPqxdh': true,
           'currentPqxdh': false,
           'reason': 'Peer Kyber key missing from new bundle',
+          'action': 'session_refused',
+        },
+      );
+      throw PqxdhDowngradeError(
+        userId: recipientBundle.userId,
+        deviceId: recipientBundle.deviceId,
+      );
+    }
+
+    // ── Peer identity key change detection ───────────────────────
+    // If we previously stored a peer's identity key and it changed,
+    // this means the peer reinstalled, switched devices, or a MITM
+    // is presenting a different key. Emit event so the app can warn.
+    final previousPeerKey = await _cryptoStorage.getPeerIdentityKey(
+      recipientBundle.userId,
+      recipientBundle.deviceId,
+    );
+    if (previousPeerKey != null &&
+        previousPeerKey != recipientBundle.identityKey) {
+      _eventBus?.emitType(
+        SecurityEventType.peerIdentityKeyChanged,
+        sessionId: _sessionKey(
+          recipientBundle.userId,
+          recipientBundle.deviceId,
+        ),
+        metadata: {
+          'reason': 'Identity key differs from stored key. '
+              'Peer may have reinstalled or this may be a MITM attack.',
         },
       );
     }
 
-    final x3dhResult = await X3DH.initiateKeyAgreement(
-      identityKeyPair: identityKP,
-      recipientBundle: recipientBundle,
-      pqxdhPolicy: pqxdhPolicy,
-    );
+    final X3DHResult x3dhResult;
+    try {
+      x3dhResult = await X3DH.initiateKeyAgreement(
+        identityKeyPair: identityKP,
+        recipientBundle: recipientBundle,
+        pqxdhPolicy: pqxdhPolicy,
+      );
+    } catch (e) {
+      if (e.toString().contains('signature verification failed')) {
+        _eventBus?.emitType(
+          SecurityEventType.signatureVerificationFailed,
+          sessionId: _sessionKey(
+            recipientBundle.userId,
+            recipientBundle.deviceId,
+          ),
+          metadata: {'source': 'x3dh', 'reason': 'signed_pre_key'},
+        );
+      }
+      rethrow;
+    }
 
     // Record peer's current PQXDH capability for future downgrade checks
     await _cryptoStorage.savePeerPqxdhCapability(
       recipientBundle.userId,
       recipientBundle.deviceId,
       x3dhResult.pqxdhUsed,
+    );
+
+    // Store the peer's identity key for future change detection
+    await _cryptoStorage.savePeerIdentityKey(
+      recipientBundle.userId,
+      recipientBundle.deviceId,
+      recipientBundle.identityKey,
     );
 
     CryptoDebugLogger.log(
@@ -844,6 +900,29 @@ class SignalProtocolManager {
     try {
       return await _decryptMessageInner(senderId, senderDeviceId, envelope);
     } catch (e) {
+      final msg = e.toString();
+
+      // Replay rejection — emit event and rethrow without triggering reset
+      if (msg.contains('Replay attack detected') ||
+          msg.contains('already received')) {
+        _eventBus?.emitType(
+          SecurityEventType.replayRejected,
+          sessionId: _sessionKey(senderId, senderDeviceId),
+          metadata: {'source': 'double_ratchet'},
+        );
+        rethrow;
+      }
+
+      // Skipped-key cap exceeded — emit event and rethrow
+      if (msg.contains('Too many skipped message keys')) {
+        _eventBus?.emitType(
+          SecurityEventType.skippedKeyCapReached,
+          sessionId: _sessionKey(senderId, senderDeviceId),
+          metadata: {'source': 'double_ratchet'},
+        );
+        rethrow;
+      }
+
       if (!_shouldTriggerReset(e)) rethrow;
 
       CryptoDebugLogger.log(
@@ -1273,10 +1352,23 @@ class SignalProtocolManager {
     );
 
     // Unseal the outer envelope to discover the sender
-    final content = await SealedSenderEnvelope.unseal(
-      sealedEnvelope: sealedEnvelope,
-      recipientIdentityKeyPair: identityKP,
-    );
+    final SealedSenderContent content;
+    try {
+      content = await SealedSenderEnvelope.unseal(
+        sealedEnvelope: sealedEnvelope,
+        recipientIdentityKeyPair: identityKP,
+      );
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('nonce already seen') ||
+          msg.contains('replay window')) {
+        _eventBus?.emitType(
+          SecurityEventType.replayRejected,
+          metadata: {'source': 'sealed_sender', 'reason': msg},
+        );
+      }
+      rethrow;
+    }
 
     CryptoDebugLogger.log(
       'UNSEAL',
@@ -1434,8 +1526,11 @@ class SignalProtocolManager {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
-      // Check absolute max lifetime — never use a key past this age
-      if ((now - createdAt) > absoluteMaxKeyLifetime.inMilliseconds) {
+      // Check absolute max lifetime — never use a key past this age.
+      // Grace period tolerates small clock drifts (e.g. device clock 30min ahead).
+      final maxWithGrace = absoluteMaxKeyLifetime.inMilliseconds +
+          clockDriftGracePeriod.inMilliseconds;
+      if ((now - createdAt) > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Signed pre-key exceeded absolute max lifetime — forcing rotation',
@@ -1541,8 +1636,10 @@ class SignalProtocolManager {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     if (createdAt != null && (now - createdAt) < maxAge.inMilliseconds) {
-      // Check absolute max lifetime
-      if ((now - createdAt) > absoluteMaxKeyLifetime.inMilliseconds) {
+      // Check absolute max lifetime with clock drift grace period
+      final maxWithGrace = absoluteMaxKeyLifetime.inMilliseconds +
+          clockDriftGracePeriod.inMilliseconds;
+      if ((now - createdAt) > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Kyber key exceeded absolute max lifetime — forcing rotation',
@@ -1638,6 +1735,25 @@ class SignalProtocolManager {
     if (spkBundle != null) return spkBundle;
     if (kyberRotated) return generateKeyBundle();
     return null;
+  }
+
+  /// Force immediate rotation of all rotatable keys.
+  ///
+  /// Use during incident response when key compromise is suspected.
+  /// Bypasses age checks and rotates both signed pre-key and Kyber key
+  /// unconditionally.
+  ///
+  /// Returns the updated key bundle — caller MUST upload to server
+  /// immediately after this call.
+  Future<Map<String, dynamic>> forceKeyRotationNow() async {
+    final bundle = await rotateKeysIfNeeded(
+      signedPreKeyMaxAge: Duration.zero,
+      kyberKeyMaxAge: Duration.zero,
+    );
+    // rotateKeysIfNeeded returns null only when both keys are fresh.
+    // With Duration.zero every key is "stale", so bundle will always be
+    // non-null. Defensive fallback just in case.
+    return bundle ?? await generateKeyBundle();
   }
 
   /// Return the number of one-time pre-keys currently stored locally.
@@ -1741,11 +1857,15 @@ class SignalProtocolManager {
     final now = DateTime.now().millisecondsSinceEpoch;
     var allFresh = true;
 
+    // Clock drift grace period for all expiry checks
+    final maxWithGrace = absoluteMaxKeyLifetime.inMilliseconds +
+        clockDriftGracePeriod.inMilliseconds;
+
     // Check signed pre-key age
     final spkCreatedAt = await _cryptoStorage.getSignedPreKeyCreatedAt();
     if (spkCreatedAt != null) {
       final age = now - spkCreatedAt;
-      if (age > absoluteMaxKeyLifetime.inMilliseconds) {
+      if (age > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Signed pre-key age ${age}ms exceeds '
@@ -1763,7 +1883,7 @@ class SignalProtocolManager {
     final kyberCreatedAt = await _cryptoStorage.getKyberCreatedAt();
     if (kyberCreatedAt != null) {
       final age = now - kyberCreatedAt;
-      if (age > absoluteMaxKeyLifetime.inMilliseconds) {
+      if (age > maxWithGrace) {
         CryptoDebugLogger.log(
           'KEY_LIFECYCLE',
           'EXPIRED: Kyber key age ${age}ms exceeds '
@@ -1941,12 +2061,36 @@ class SignalProtocolManager {
     );
     final messageJson = jsonDecode(ciphertext) as Map<String, dynamic>;
     final senderKeyMessage = SenderKeyMessage.fromJson(messageJson);
-    final paddedPlaintext = await _senderKeyManager.decrypt(
-      groupId,
-      senderId,
-      senderKeyMessage,
-    );
-    return MessagePadding.unpadString(paddedPlaintext);
+    try {
+      final paddedPlaintext = await _senderKeyManager.decrypt(
+        groupId,
+        senderId,
+        senderKeyMessage,
+      );
+      return MessagePadding.unpadString(paddedPlaintext);
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('signature verification failed')) {
+        _eventBus?.emitType(
+          SecurityEventType.signatureVerificationFailed,
+          sessionId: groupId,
+          metadata: {'source': 'sender_key', 'senderId': senderId},
+        );
+      } else if (msg.contains('Possible replay attack')) {
+        _eventBus?.emitType(
+          SecurityEventType.replayRejected,
+          sessionId: groupId,
+          metadata: {'source': 'sender_key', 'senderId': senderId},
+        );
+      } else if (msg.contains('Too many skipped iterations')) {
+        _eventBus?.emitType(
+          SecurityEventType.skippedKeyCapReached,
+          sessionId: groupId,
+          metadata: {'source': 'sender_key', 'senderId': senderId},
+        );
+      }
+      rethrow;
+    }
   }
 
   /// Whether we have our own Sender Key for a group (ready to encrypt).
@@ -2034,6 +2178,11 @@ class SignalProtocolManager {
   }
 
   /// Check if the session pair has exceeded the reset rate limit.
+  ///
+  /// Includes backward-clock defense: if the current wall clock is before
+  /// the most recent recorded reset, the clock went backwards (NTP drift,
+  /// manual change, or deliberate attack). In that case we conservatively
+  /// keep the rate limit active to prevent bypass via clock manipulation.
   Future<bool> _isResetRateLimited(String userId, String deviceId) async {
     final timestamps = await _cryptoStorage.loadResetTimestamps(
       userId,
@@ -2042,14 +2191,26 @@ class SignalProtocolManager {
     if (timestamps.isEmpty) return false;
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    final windowStart = now - _resetWindow.inMilliseconds;
+    final lastReset = timestamps.last;
+
+    // Backward-clock defense: if now < lastReset, clock went backwards.
+    // Conservatively treat as rate-limited to prevent bypass.
+    if (now < lastReset) {
+      CryptoDebugLogger.log(
+        'RATE_LIMIT',
+        'Clock went backwards (now=$now < lastReset=$lastReset). '
+            'Keeping rate limit active.',
+      );
+      return true;
+    }
 
     // Check cooldown: if last reset was >24h ago, clear and allow
-    final lastReset = timestamps.last;
     if (now - lastReset > _resetCooldown.inMilliseconds) {
       await _cryptoStorage.clearResetTimestamps(userId, deviceId);
       return false;
     }
+
+    final windowStart = now - _resetWindow.inMilliseconds;
 
     // Count resets within the window
     final recentResets = timestamps.where((t) => t > windowStart).length;

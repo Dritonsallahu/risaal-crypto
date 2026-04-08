@@ -69,10 +69,37 @@ lib/src/key_helper.dart @Dritonsallahu
 - **Allow force pushes:** **No** (never)
 - **Allow deletions:** **No** (never)
 
-### 4. Signed Commits
+### 4. Signed Commits & Tags
 
 - **Require signed commits:** Recommended but not enforced (GPG signing requires local setup)
 - **Require linear history:** **Yes** (no merge commits, rebase-only)
+- **Require GPG-signed release tags:** **Yes** (enforced by release procedure below)
+
+### 5. Release Tag Signing
+
+Every release MUST use a GPG-signed tag. The CI release workflow triggers on `v*` tags and adds GitHub Attestations (SLSA build provenance), but the tag itself must be signed locally:
+
+```bash
+# 1. Ensure GPG key is configured
+git config user.signingkey <YOUR_GPG_KEY_ID>
+
+# 2. Create GPG-signed tag
+git tag -s v1.2.0 -m "Release v1.2.0"
+
+# 3. Push signed tag (triggers release.yml CI)
+git push origin v1.2.0
+```
+
+**Verification by consumers:**
+```bash
+# Verify GPG signature on tag
+git verify-tag v1.2.0
+
+# Verify GitHub build attestation
+gh attestation verify risaal_crypto-1.2.0.tar.gz --repo Dritonsallahu/risaal-crypto
+```
+
+Both GPG tag signatures and GitHub Attestations provide independent verification chains. GPG proves the maintainer authored the tag; attestations prove CI built the artifact from that exact commit.
 
 ---
 

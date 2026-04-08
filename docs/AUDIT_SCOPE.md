@@ -79,6 +79,36 @@ Based on similar Signal Protocol audits:
 - **Minimum**: 2 auditors, 2 weeks (protocol review + code audit)
 - **Recommended**: 2 auditors, 4 weeks (includes fuzzing, side-channel analysis)
 
+## Review Schedule
+
+| Type | Frequency | Scope | Responsibility |
+|------|-----------|-------|---------------|
+| Peer review | Every PR | All `lib/src/` changes | @Dritonsallahu (CODEOWNERS) |
+| Informal review | Every 3–6 months | Full package, focus on recent changes | Trusted peer / security-savvy reviewer |
+| Formal audit | Annually (target) | Full protocol + code audit | Third-party security firm |
+| Incident-triggered | On discovery | Affected component only | Maintainer + reviewer |
+
+### Review Triggers (outside scheduled cadence)
+
+A review MUST be requested when:
+- A new cryptographic primitive is added or replaced
+- The session auto-reset or key rotation logic changes
+- The PQXDH hybrid construction is modified
+- More than 500 lines of `lib/src/` change in a single release
+- A security vulnerability is reported and patched
+
+### Audit History
+
+| Date | Type | Reviewer | Outcome |
+|------|------|----------|---------|
+| 2026-04 | Informal peer review | — | In progress (this review) |
+
+### Next Milestones
+
+- **Q2 2026:** Complete informal peer review, address all findings
+- **Q3 2026:** Issue RFP for formal third-party audit
+- **Q4 2026:** First formal audit (target)
+
 ## Contact
 
 Report findings to: security@risaal.org (PGP key available on request)
