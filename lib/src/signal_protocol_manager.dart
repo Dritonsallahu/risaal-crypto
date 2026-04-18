@@ -86,6 +86,9 @@ class SignalProtocolManager {
   /// via `bus.events.listen(...)` to drive UI or telemetry.
   final SecurityEventBus? _eventBus;
 
+  /// In-memory nonce deduplication set for Sealed Sender replay protection.
+  Set<String> _seenNonces = {};
+
   /// In-memory session cache: "recipientId:deviceId" → DoubleRatchet.
   final Map<String, DoubleRatchet> _sessions = {};
 
@@ -190,6 +193,7 @@ class SignalProtocolManager {
         'Identity public key',
         existing.publicKey,
       );
+      _seenNonces = await _cryptoStorage.loadSeenNonces();
       return false;
     }
 
@@ -1357,7 +1361,9 @@ class SignalProtocolManager {
       content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealedEnvelope,
         recipientIdentityKeyPair: identityKP,
+        seenNonces: _seenNonces,
       );
+      await _cryptoStorage.saveSeenNonces(_seenNonces);
     } catch (e) {
       final msg = e.toString();
       if (msg.contains('nonce already seen') || msg.contains('replay window')) {

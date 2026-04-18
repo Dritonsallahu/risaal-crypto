@@ -259,9 +259,9 @@ class SealedSenderEnvelope {
   ///   - [maxReplayWindowMs]: Maximum allowed timestamp drift in milliseconds.
   ///     Defaults to 300000 (5 minutes). Smaller values are more secure but
   ///     may reject legitimate messages on slow networks.
-  ///   - [seenNonces]: Optional set of previously seen nonce strings (base64).
-  ///     If provided, the envelope nonce is checked against this set before
-  ///     processing. If already present, the message is rejected as a replay.
+  ///   - [seenNonces]: Set of previously seen nonce strings (base64).
+  ///     The envelope nonce is checked against this set before processing.
+  ///     If already present, the message is rejected as a replay.
   ///     The nonce is added to the set after successful processing.
   ///
   /// Throws:
@@ -277,7 +277,7 @@ class SealedSenderEnvelope {
     bool Function(String token)? validateServerToken,
     int maxReplayWindowMs =
         5 * 60 * 1000 + 30 * 1000, // 5min + 30s drift tolerance
-    Set<String>? seenNonces,
+    required Set<String> seenNonces,
   }) async {
     CryptoDebugLogger.log('SS_UNSEAL', 'Unsealing envelope...');
     final ephemeralPublicKey = sealedEnvelope['ephemeralPublicKey'] as String;
@@ -289,7 +289,7 @@ class SealedSenderEnvelope {
         'SS_UNSEAL', 'Our identity key', recipientIdentityKeyPair.publicKey);
 
     // 1. Nonce replay check — reject before any expensive crypto
-    if (seenNonces != null && seenNonces.contains(nonceB64)) {
+    if (seenNonces.contains(nonceB64)) {
       throw StateError(
         'Sealed sender nonce already seen — rejecting replay',
       );
@@ -383,9 +383,7 @@ class SealedSenderEnvelope {
     }
 
     // 7. Record the nonce as seen (after all validations pass)
-    if (seenNonces != null) {
-      seenNonces.add(nonceB64);
-    }
+    seenNonces.add(nonceB64);
 
     // 8. Extract the sender certificate and message
     return SealedSenderContent(

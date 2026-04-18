@@ -514,6 +514,30 @@ class CryptoStorage {
 
   Future<String?> readRaw(String key) => _secureStorage.read(key: key);
 
+  // ── Sealed Sender Nonce Deduplication ────────────────────────────
+
+  static const _keySeenNonces = 'crypto_seen_nonces';
+
+  /// Save the sealed sender nonce deduplication set.
+  /// Bounded to most recent 10,000 entries.
+  Future<void> saveSeenNonces(Set<String> nonces) async {
+    final list = nonces.toList();
+    final trimmed =
+        list.length > 10000 ? list.sublist(list.length - 10000) : list;
+    await _secureStorage.write(
+      key: _keySeenNonces,
+      value: jsonEncode(trimmed),
+    );
+  }
+
+  /// Load persisted sealed sender nonces for replay protection.
+  Future<Set<String>> loadSeenNonces() async {
+    final raw = await _secureStorage.read(key: _keySeenNonces);
+    if (raw == null || raw.isEmpty) return {};
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.cast<String>().toSet();
+  }
+
   // ── Panic Wipe ────────────────────────────────────────────────────
 
   /// Erase all crypto material from secure storage.
