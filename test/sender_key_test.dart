@@ -224,9 +224,12 @@ void main() {
       final enc1 = await manager.encrypt(groupId, plaintext);
       final enc2 = await manager.encrypt(groupId, plaintext);
 
-      // Different IVs
-      expect(enc1.iv, isNot(enc2.iv));
-      // Different ciphertexts (because of IV and chain key ratchet)
+      // v2 format: IV field is empty, nonce is embedded in ciphertext blob
+      // Different nonces (bytes 1-12 of ciphertext blob)
+      final nonce1 = base64Decode(enc1.ciphertext).sublist(1, 13);
+      final nonce2 = base64Decode(enc2.ciphertext).sublist(1, 13);
+      expect(nonce1, isNot(equals(nonce2)));
+      // Different ciphertexts (because of nonce and chain key ratchet)
       expect(enc1.ciphertext, isNot(enc2.ciphertext));
       // Different iterations
       expect(enc2.iteration, enc1.iteration + 1);
@@ -512,7 +515,7 @@ void main() {
       );
     });
 
-    test('Tampered IV -> decrypt throws', () async {
+    test('Tampered nonce/IV -> decrypt throws', () async {
       final (managerAlice, _) = await _createManager('alice');
       final (managerBob, _) = await _createManager('bob');
       const groupId = 'group-001';
@@ -529,17 +532,17 @@ void main() {
         utf8.encode('Original message'),
       );
 
-      // Tamper with the IV
-      final tamperedIv = base64Decode(encrypted.iv);
-      tamperedIv[0] ^= 0xFF;
+      // Tamper with the nonce bytes inside the ciphertext blob (bytes 1-12)
+      final ctBytes = base64Decode(encrypted.ciphertext);
+      ctBytes[2] ^= 0xFF; // Flip a nonce byte
       final tamperedMessage = SenderKeyMessage(
         iteration: encrypted.iteration,
-        ciphertext: encrypted.ciphertext,
-        iv: base64Encode(tamperedIv),
+        ciphertext: base64Encode(ctBytes),
+        iv: encrypted.iv,
         signature: encrypted.signature,
       );
 
-      // Tampering with IV changes the signature input, so Ed25519 verification fails
+      // Tampering with nonce changes the signature input, so Ed25519 verification fails
       await expectLater(
         () => managerBob.decrypt(groupId, 'alice', tamperedMessage),
         throwsA(
@@ -751,6 +754,86 @@ void main() {
       expect(restored.signingPublicKey, legacyJson['signingKey']);
       // No private key in legacy format
       expect(restored.signingPrivateKey, isNull);
+    });
+  });
+
+  group('SenderKeyManager GCM v2 format', () {
+    test('encrypt produces v2 GCM format with version byte 0x02', () async {
+      final (manager, _) = await _createManager('alice');
+      const groupId = 'group-gcm';
+
+      await manager.generateSenderKey(groupId);
+      final plaintext = utf8.encode('Hello GCM group!');
+
+      final message = await manager.encrypt(groupId, plaintext);
+
+      // The ciphertext should start with version byte 0x02 (GCM)
+      final ctBytes = base64Decode(message.ciphertext);
+      expect(ctBytes[0], equals(0x02),
+          reason: 'First byte should be version 0x02 (GCM)');
+      // GCM blob: version(1) + nonce(12) + ciphertext(N) + mac(16)
+      expect(ctBytes.length, greaterThan(1 + 12 + 1 + 16));
+    });
+
+    test('iv field is empty in v2 format', () async {
+      final (manager, _) = await _createManager('alice');
+      const groupId = 'group-gcm';
+
+      await manager.generateSenderKey(groupId);
+      final message =
+          await manager.encrypt(groupId, utf8.encode('Test'));
+
+      expect(message.iv, isEmpty);
+    });
+
+    test('GCM encrypt/decrypt round-trip preserves plaintext', () async {
+      final (managerAlice, _) = await _createManager('alice');
+      final (managerBob, _) = await _createManager('bob');
+      const groupId = 'group-gcm';
+
+      final aliceDist = await managerAlice.generateSenderKey(groupId);
+      await managerBob.processSenderKeyDistribution(
+          groupId, 'alice', aliceDist);
+
+      final plaintext = utf8.encode('GCM round-trip test message');
+      final encrypted = await managerAlice.encrypt(groupId, plaintext);
+      final decrypted =
+          await managerBob.decrypt(groupId, 'alice', encrypted);
+
+      expect(decrypted, equals(plaintext));
+      expect(utf8.decode(decrypted), 'GCM round-trip test message');
+    });
+
+    test('GCM tampered ciphertext detected by GCM MAC', () async {
+      final (managerAlice, _) = await _createManager('alice');
+      final (managerBob, _) = await _createManager('bob');
+      const groupId = 'group-gcm';
+
+      final aliceDist = await managerAlice.generateSenderKey(groupId);
+      await managerBob.processSenderKeyDistribution(
+          groupId, 'alice', aliceDist);
+
+      final encrypted = await managerAlice.encrypt(
+          groupId, utf8.encode('Secret'));
+
+      // Tamper with a byte in the middle of the ciphertext blob
+      // (past version byte and nonce, in the actual ciphertext portion)
+      final ctBytes = base64Decode(encrypted.ciphertext);
+      if (ctBytes.length > 20) {
+        ctBytes[15] ^= 0xFF; // Flip a byte in the ciphertext region
+      }
+      final tamperedMessage = SenderKeyMessage(
+        iteration: encrypted.iteration,
+        ciphertext: base64Encode(ctBytes),
+        iv: encrypted.iv,
+        signature: encrypted.signature,
+      );
+
+      // Should fail at Ed25519 signature verification (signature input changed)
+      await expectLater(
+        () => managerBob.decrypt(groupId, 'alice', tamperedMessage),
+        throwsA(isA<StateError>()),
+      );
     });
   });
 }
