@@ -16,7 +16,7 @@ import 'secure_memory.dart';
 /// Each group member generates their own Sender Key (one per group) and
 /// distributes it to all other members via 1-to-1 encrypted sessions. When
 /// Alice sends a group message, she encrypts it once with her Sender Key
-/// (AES-256-CBC + Ed25519 signature) and broadcasts the same ciphertext to all
+/// (AES-256-GCM + Ed25519 signature) and broadcasts the same ciphertext to all
 /// members. Everyone who has Alice's Sender Key can decrypt.
 ///
 /// The chain key ratchets forward after each message (forward secrecy within
@@ -156,7 +156,17 @@ class SenderKeyDistribution {
 /// Broadcast to all group members. Recipients who have the sender's Sender Key
 /// can decrypt using [SenderKeyManager.decrypt].
 ///
-/// Wire format (JSON):
+/// **v2 format** (current — AES-256-GCM):
+/// ```json
+/// {
+///   "iteration": 5,
+///   "ciphertext": "<base64: 0x02 || nonce(12) || ciphertext(N) || mac(16)>",
+///   "iv": "",
+///   "signature": "<base64 Ed25519 signature>"
+/// }
+/// ```
+///
+/// **v1 format** (legacy — AES-256-CBC, read-only):
 /// ```json
 /// {
 ///   "iteration": 5,
@@ -169,8 +179,10 @@ class SenderKeyDistribution {
 /// The [iteration] allows recipients to fast-forward their chain key if they
 /// missed messages (e.g., iteration jumps from 3 to 7 — derive chain key 4 times).
 ///
-/// The [signature] is an Ed25519 signature over (IV || ciphertext || iteration),
-/// produced by the sender's private signing key. Only the sender can produce
+/// The [signature] is an Ed25519 signature over the ciphertext blob + iteration.
+/// For v2: signature over (blob || iteration).
+/// For v1 legacy: signature over (iv || ciphertext || iteration).
+/// Produced by the sender's private signing key. Only the sender can produce
 /// valid signatures; recipients verify using the sender's public key.
 ///
 /// See also:
@@ -178,8 +190,8 @@ class SenderKeyDistribution {
 ///   - [SenderKeyManager.decrypt] which consumes it
 class SenderKeyMessage {
   final int iteration;
-  final String ciphertext; // base64 AES-256-CBC ciphertext
-  final String iv; // base64 16-byte IV
+  final String ciphertext; // base64: v2 GCM blob (0x02+nonce+ct+mac) or v1 CBC ciphertext
+  final String iv; // base64 IV for v1 legacy; empty for v2 GCM
   final String signature; // base64 Ed25519 signature
 
   const SenderKeyMessage({
@@ -215,7 +227,7 @@ class SenderKeyMessage {
 ///   1. Each group member generates a Sender Key (chain key + Ed25519 signing key pair)
 ///   2. The Sender Key distribution (chain key + Ed25519 **public** key) is sent
 ///      to all members via 1-to-1 encrypted sessions
-///   3. When sending to the group, encrypt with AES-256-CBC using a key derived from the chain key
+///   3. When sending to the group, encrypt with AES-256-GCM using a key derived from the chain key
 ///   4. Authenticate the ciphertext with Ed25519 signature using the sender's **private** key
 ///   5. Broadcast the same ciphertext to all members
 ///   6. The chain key ratchets forward after each message (forward secrecy)
@@ -372,16 +384,12 @@ class SenderKeyManager {
     // Derive message key from current chain key
     final messageKey = await _deriveMessageKey(state.chainKey);
 
-    // Generate random 16-byte IV for AES-256-CBC
-    final iv = _generateRandomBytes(16);
+    // Encrypt with AES-256-GCM (v2 format: version + nonce + ct + mac)
+    final ciphertextBlob = await _aes256GcmEncrypt(plaintext, messageKey);
 
-    // Encrypt with AES-256-CBC
-    final ciphertext = await _aes256CbcEncrypt(plaintext, messageKey, iv);
-
-    // Ed25519 signature over the ciphertext for authentication
+    // Ed25519 signature over the entire blob for authentication
     final signatureInput = <int>[
-      ...iv,
-      ...ciphertext,
+      ...ciphertextBlob,
       ..._intToBytes(state.iteration),
     ];
 
@@ -420,8 +428,8 @@ class SenderKeyManager {
 
     return SenderKeyMessage(
       iteration: currentIteration,
-      ciphertext: base64Encode(ciphertext),
-      iv: base64Encode(iv),
+      ciphertext: base64Encode(ciphertextBlob),
+      iv: '', // Empty for v2 — nonce is embedded in ciphertextBlob
       signature: signature, // Already base64 from SignalKeyHelper.sign
     );
   }
@@ -508,15 +516,27 @@ class SenderKeyManager {
     // Derive the message key at the target iteration
     final messageKey = await _deriveMessageKey(chainKey);
 
-    // Verify Ed25519 signature
-    final iv = base64Decode(message.iv);
-    final ciphertext = base64Decode(message.ciphertext);
+    // Decode ciphertext to check version
+    final ctBytes = base64Decode(message.ciphertext);
+    final isV2 = ctBytes.isNotEmpty && ctBytes[0] == 0x02;
 
-    final signatureInput = <int>[
-      ...iv,
-      ...ciphertext,
-      ..._intToBytes(message.iteration),
-    ];
+    // Build signature input based on version
+    final List<int> signatureInput;
+    if (isV2) {
+      // v2: signature over entire blob (version + nonce + ct + mac)
+      signatureInput = <int>[
+        ...ctBytes,
+        ..._intToBytes(message.iteration),
+      ];
+    } else {
+      // v1 legacy: signature over iv + ciphertext + iteration
+      final iv = base64Decode(message.iv);
+      signatureInput = <int>[
+        ...iv,
+        ...ctBytes,
+        ..._intToBytes(message.iteration),
+      ];
+    }
 
     final signatureValid = await SignalKeyHelper.verify(
       state.signingPublicKey,
@@ -530,8 +550,14 @@ class SenderKeyManager {
       );
     }
 
-    // Decrypt with AES-256-CBC
-    final plaintext = await _aes256CbcDecrypt(ciphertext, messageKey, iv);
+    // Version-aware decryption
+    List<int> plaintext;
+    if (isV2) {
+      plaintext = await _aes256GcmDecrypt(ctBytes, messageKey);
+    } else {
+      final iv = base64Decode(message.iv);
+      plaintext = await _legacyCbcDecrypt(ctBytes, messageKey, iv);
+    }
 
     // Zero the message key after decryption — must not persist in RAM
     SecureMemory.zeroBytes(messageKey);
@@ -588,28 +614,53 @@ class SenderKeyManager {
     return mac.bytes;
   }
 
-  // ── Private: AES-256-CBC ──────────────────────────────────────────
+  // ── Private: AES-256-GCM (v2) ────────────────────────────────────
 
-  /// AES-256-CBC encryption using the `cryptography` package's AesCbc.
-  static Future<List<int>> _aes256CbcEncrypt(
+  /// AES-256-GCM encryption (v2 format).
+  /// Returns: version_byte(1) + nonce(12) + ciphertext(N) + mac(16).
+  static Future<List<int>> _aes256GcmEncrypt(
     List<int> plaintext,
     List<int> key,
-    List<int> iv,
   ) async {
-    final algorithm = AesCbc.with256bits(macAlgorithm: MacAlgorithm.empty);
+    final algorithm = AesGcm.with256bits();
     final secretKey = SecretKey(List<int>.from(key));
-    // Pad plaintext to AES block size (PKCS7)
-    final padded = _pkcs7Pad(plaintext, 16);
     final secretBox = await algorithm.encrypt(
-      padded,
+      plaintext,
       secretKey: secretKey,
-      nonce: iv,
     );
-    return secretBox.cipherText;
+    return [
+      0x02, // version byte: GCM
+      ...secretBox.nonce,
+      ...secretBox.cipherText,
+      ...secretBox.mac.bytes,
+    ];
   }
 
-  /// AES-256-CBC decryption.
-  static Future<List<int>> _aes256CbcDecrypt(
+  /// AES-256-GCM decryption (v2 format).
+  /// Input: version_byte(1) + nonce(12) + ciphertext(N) + mac(16).
+  static Future<List<int>> _aes256GcmDecrypt(
+    List<int> blob,
+    List<int> key,
+  ) async {
+    // Minimum: version(1) + nonce(12) + ciphertext(1+) + mac(16) = 30
+    if (blob.length < 30) {
+      throw FormatException('GCM blob too short: ${blob.length} < 30 bytes');
+    }
+    // Strip version byte (already checked by caller)
+    final nonce = blob.sublist(1, 13); // 12 bytes
+    final mac = Mac(blob.sublist(blob.length - 16)); // last 16 bytes
+    final ciphertext = blob.sublist(13, blob.length - 16);
+    final algorithm = AesGcm.with256bits();
+    final secretKey = SecretKey(List<int>.from(key));
+    final secretBox = SecretBox(ciphertext, nonce: nonce, mac: mac);
+    return algorithm.decrypt(secretBox, secretKey: secretKey);
+  }
+
+  // ── Private: Legacy AES-256-CBC (v1, read-only) ─────────────────
+
+  /// Legacy AES-256-CBC decryption (v1 format, read-only).
+  /// Used only to decrypt messages from pre-0.3.0 clients.
+  static Future<List<int>> _legacyCbcDecrypt(
     List<int> ciphertext,
     List<int> key,
     List<int> iv,
@@ -621,25 +672,13 @@ class SenderKeyManager {
     return _pkcs7Unpad(padded);
   }
 
-  // ── Private: PKCS7 Padding ────────────────────────────────────────
-
-  static Uint8List _pkcs7Pad(List<int> data, int blockSize) {
-    final padLen = blockSize - (data.length % blockSize);
-    final padded = Uint8List(data.length + padLen);
-    padded.setRange(0, data.length, data);
-    for (var i = data.length; i < padded.length; i++) {
-      padded[i] = padLen;
-    }
-    return padded;
-  }
-
+  /// Legacy PKCS7 unpadding (v1 format only).
   static List<int> _pkcs7Unpad(List<int> data) {
     if (data.isEmpty) throw const FormatException('Empty PKCS7 data');
     final padLen = data.last;
     if (padLen < 1 || padLen > 16 || padLen > data.length) {
       throw FormatException('Invalid PKCS7 padding: $padLen');
     }
-    // Verify all padding bytes are correct
     for (var i = data.length - padLen; i < data.length; i++) {
       if (data[i] != padLen) {
         throw FormatException('Invalid PKCS7 padding byte at $i');

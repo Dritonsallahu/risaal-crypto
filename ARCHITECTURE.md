@@ -687,10 +687,16 @@ Bounded resource consumption prevents denial-of-service:
 
 ### 8. Deniable Authentication
 
-Messages are authenticated but not publicly verifiable:
-- HMAC-based authentication (symmetric key)
+1-to-1 messages are authenticated but not publicly verifiable:
+- Shared symmetric keys mean both parties can produce the same MAC
 - Recipient knows sender is authentic, but cannot prove it to a third party
 - Provides plausible deniability for senders
+
+Group messages use Ed25519 signatures (non-deniable):
+- Only the sender's private key can produce a valid signature
+- Provides stronger sender authentication and non-repudiation
+- Recipients CAN prove sender identity to third parties
+- This is a deliberate design choice for group integrity
 
 ---
 

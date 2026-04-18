@@ -33,7 +33,7 @@ Provides end-to-end encryption with forward secrecy, post-compromise security, d
 | Key agreement | X25519 (Curve25519) | `cryptography` ^2.7.0 |
 | Signatures | Ed25519 | `cryptography` ^2.7.0 |
 | Symmetric encryption (1:1) | AES-256-GCM | `cryptography` ^2.7.0 |
-| Symmetric encryption (groups) | AES-256-CBC + HMAC-SHA256 | `cryptography` ^2.7.0 |
+| Symmetric encryption (groups) | AES-256-GCM + Ed25519 signatures | `cryptography` ^2.7.0 |
 | Key derivation | HKDF-SHA256 | `cryptography` ^2.7.0 |
 | Hash function | SHA-256, SHA-512 | `crypto` ^3.0.5 |
 | Message authentication | HMAC-SHA256 | `cryptography` ^2.7.0 |
@@ -46,7 +46,8 @@ Provides end-to-end encryption with forward secrecy, post-compromise security, d
 |----------|-----------|--------------|
 | Forward secrecy | DH ratchet generates new keys per message exchange | [double_ratchet_test.dart](test/double_ratchet_test.dart) |
 | Post-compromise security | New DH ratchet step heals after key compromise | [adversarial_crypto_test.dart](test/adversarial_crypto_test.dart) |
-| Deniable authentication | No cryptographic proof of sender identity | Protocol design (X3DH) |
+| Deniable authentication (1-to-1) | No cryptographic proof of sender identity in 1-to-1 chats | Protocol design (X3DH) |
+| Non-repudiable sender auth (groups) | Ed25519 signatures prove sender identity in groups | sender_key.dart |
 | Metadata protection | Sealed Sender hides sender from server | [sealed_sender_test.dart](test/sealed_sender_test.dart) |
 | Post-quantum resistance | Kyber-768 hybrid key agreement (PQXDH) | [x3dh_test.dart](test/x3dh_test.dart) |
 | Replay protection | Message numbers + skipped key tracking (max 100) | [adversarial_crypto_test.dart](test/adversarial_crypto_test.dart) |

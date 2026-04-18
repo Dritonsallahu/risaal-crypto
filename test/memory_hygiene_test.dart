@@ -7,6 +7,7 @@ import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/secure_memory.dart';
 import 'package:risaal_crypto/src/sender_key.dart';
 import 'package:risaal_crypto/src/crypto_storage.dart';
+import 'package:risaal_crypto/src/models/session_state.dart';
 
 import 'helpers/fake_secure_storage.dart';
 
@@ -390,8 +391,7 @@ void main() {
       }
     });
 
-    test(
-        'zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
+    test('zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
         () async {
       // Same regression but for SenderKeyManager which also uses
       // SecretKey(List<int>.from(chainKey)) after the fix.
@@ -426,6 +426,97 @@ void main() {
         );
         expect(utf8.decode(decrypted), equals('Sender key regression $i'));
       }
+    });
+  });
+
+  // -- RatchetState.wipe() zeros Uint8List key fields ---------------------
+
+  group('RatchetState.wipe() memory zeroing', () {
+    test('wipe() zeros all Uint8List key fields', () {
+      final state = RatchetState(
+        dhSendingKeyPair: Uint8List.fromList(List.filled(64, 0xAB)),
+        dhReceivingKey: Uint8List.fromList(List.filled(32, 0xCD)),
+        rootKey: Uint8List.fromList(List.filled(32, 0xEF)),
+        sendingChainKey: Uint8List.fromList(List.filled(32, 0x12)),
+        receivingChainKey: Uint8List.fromList(List.filled(32, 0x34)),
+        skippedKeys: {
+          'key1:0': Uint8List.fromList(List.filled(32, 0x56)),
+          'key2:1': Uint8List.fromList(List.filled(32, 0x78)),
+        },
+        receivedMessages: {'msg1', 'msg2'},
+      );
+
+      // Verify fields are non-zero before wipe
+      expect(state.rootKey.any((b) => b != 0), isTrue);
+      expect(state.sendingChainKey.any((b) => b != 0), isTrue);
+      expect(state.dhSendingKeyPair.any((b) => b != 0), isTrue);
+      expect(state.dhReceivingKey.any((b) => b != 0), isTrue);
+      expect(state.receivingChainKey.any((b) => b != 0), isTrue);
+      expect(state.skippedKeys, hasLength(2));
+      expect(state.receivedMessages, hasLength(2));
+
+      state.wipe();
+
+      // All byte fields should be zeroed
+      expect(state.dhSendingKeyPair.every((b) => b == 0), isTrue);
+      expect(state.dhReceivingKey.every((b) => b == 0), isTrue);
+      expect(state.rootKey.every((b) => b == 0), isTrue);
+      expect(state.sendingChainKey.every((b) => b == 0), isTrue);
+      expect(state.receivingChainKey.every((b) => b == 0), isTrue);
+      expect(state.skippedKeys, isEmpty);
+      expect(state.receivedMessages, isEmpty);
+      expect(state.sendMessageNumber, 0);
+      expect(state.receiveMessageNumber, 0);
+      expect(state.previousChainLength, 0);
+    });
+
+    test('wipe() handles empty Uint8List fields without error', () {
+      final state = RatchetState(
+        dhSendingKeyPair: Uint8List(0),
+        dhReceivingKey: Uint8List(0),
+        rootKey: Uint8List(0),
+        sendingChainKey: Uint8List(0),
+        receivingChainKey: Uint8List(0),
+      );
+
+      // Should not throw
+      state.wipe();
+
+      expect(state.dhSendingKeyPair, isEmpty);
+      expect(state.skippedKeys, isEmpty);
+    });
+
+    test('toJson/fromJson round-trip preserves Uint8List data', () {
+      final original = RatchetState(
+        dhSendingKeyPair: Uint8List.fromList(List.filled(64, 0xAB)),
+        dhReceivingKey: Uint8List.fromList(List.filled(32, 0xCD)),
+        rootKey: Uint8List.fromList(List.filled(32, 0xEF)),
+        sendingChainKey: Uint8List.fromList(List.filled(32, 0x12)),
+        receivingChainKey: Uint8List.fromList(List.filled(32, 0x34)),
+        sendMessageNumber: 5,
+        receiveMessageNumber: 3,
+        previousChainLength: 2,
+        skippedKeys: {
+          'key1:0': Uint8List.fromList(List.filled(32, 0x56)),
+        },
+        receivedMessages: {'msg1', 'msg2'},
+      );
+
+      final json = original.toJson();
+      final restored = RatchetState.fromJson(json);
+
+      expect(restored.dhSendingKeyPair, equals(original.dhSendingKeyPair));
+      expect(restored.dhReceivingKey, equals(original.dhReceivingKey));
+      expect(restored.rootKey, equals(original.rootKey));
+      expect(restored.sendingChainKey, equals(original.sendingChainKey));
+      expect(restored.receivingChainKey, equals(original.receivingChainKey));
+      expect(restored.sendMessageNumber, 5);
+      expect(restored.receiveMessageNumber, 3);
+      expect(restored.previousChainLength, 2);
+      expect(restored.skippedKeys.length, 1);
+      expect(restored.skippedKeys['key1:0'],
+          equals(Uint8List.fromList(List.filled(32, 0x56))));
+      expect(restored.receivedMessages, {'msg1', 'msg2'});
     });
   });
 }

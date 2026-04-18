@@ -226,8 +226,7 @@ void main() {
       expect(previous, isNull);
     });
 
-    test('expired previous key is cleaned up during rotation check',
-        () async {
+    test('expired previous key is cleaned up during rotation check', () async {
       final storage = FakeSecureStorage();
       final manager = SignalProtocolManager(secureStorage: storage);
       await manager.initialize();
@@ -457,7 +456,8 @@ void main() {
         maxAge: const Duration(days: 60),
       );
 
-      expect(result, isNull, reason: 'Key within absolute max should not rotate');
+      expect(result, isNull,
+          reason: 'Key within absolute max should not rotate');
     });
   });
 
@@ -578,7 +578,8 @@ void main() {
       // Simulate an expired previous SPK
       await storage.write(
         key: 'crypto_previous_signed_pre_key',
-        value: '{"keyId":0,"keyPair":{"publicKey":"a","privateKey":"b"},"signature":"c"}',
+        value:
+            '{"keyId":0,"keyPair":{"publicKey":"a","privateKey":"b"},"signature":"c"}',
       );
       final pastExpiry = DateTime.now().millisecondsSinceEpoch - 1000;
       await storage.write(
@@ -697,10 +698,8 @@ void main() {
 
         // Get Bob's bundle
         final bobBundle = await bob.generateKeyBundle();
-        final signedPreKey =
-            bobBundle['signedPreKey'] as Map<String, dynamic>;
-        final oneTimePreKeys =
-            bobBundle['oneTimePreKeys'] as List<dynamic>;
+        final signedPreKey = bobBundle['signedPreKey'] as Map<String, dynamic>;
+        final oneTimePreKeys = bobBundle['oneTimePreKeys'] as List<dynamic>;
         final firstOtp = oneTimePreKeys.first as Map<String, dynamic>;
 
         final bundle = PreKeyBundle(
@@ -758,10 +757,8 @@ void main() {
       };
 
       final bobBundle = await bob.generateKeyBundle();
-      final signedPreKey =
-          bobBundle['signedPreKey'] as Map<String, dynamic>;
-      final oneTimePreKeys =
-          bobBundle['oneTimePreKeys'] as List<dynamic>;
+      final signedPreKey = bobBundle['signedPreKey'] as Map<String, dynamic>;
+      final oneTimePreKeys = bobBundle['oneTimePreKeys'] as List<dynamic>;
       final firstOtp = oneTimePreKeys.first as Map<String, dynamic>;
 
       final bundle = PreKeyBundle(

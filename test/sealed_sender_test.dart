@@ -29,6 +29,7 @@ void main() {
       final content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientIdentityKp,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice-123');
@@ -116,6 +117,7 @@ void main() {
         () => SealedSenderEnvelope.unseal(
           sealedEnvelope: sealed,
           recipientIdentityKeyPair: wrongRecipientKp,
+          seenNonces: <String>{},
         ),
         throwsA(isA<Exception>()),
       );
@@ -181,6 +183,7 @@ void main() {
       final content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
+        seenNonces: <String>{},
       );
 
       expect(content.encryptedMessage['dhPublicKey'], 'some_base64_key');

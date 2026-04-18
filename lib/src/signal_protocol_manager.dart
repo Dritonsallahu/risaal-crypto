@@ -78,6 +78,7 @@ class SealedSenderResult {
 ///   - [SealedSenderEnvelope] for metadata protection
 class SignalProtocolManager {
   final CryptoStorage _cryptoStorage;
+  final CryptoSecureStorage _secureStorage;
 
   /// Stream-based security event bus for observability.
   ///
@@ -85,6 +86,9 @@ class SignalProtocolManager {
   /// exhaustion warnings, etc.) are emitted here. The host app can subscribe
   /// via `bus.events.listen(...)` to drive UI or telemetry.
   final SecurityEventBus? _eventBus;
+
+  /// In-memory nonce deduplication set for Sealed Sender replay protection.
+  Set<String> _seenNonces = {};
 
   /// In-memory session cache: "recipientId:deviceId" → DoubleRatchet.
   final Map<String, DoubleRatchet> _sessions = {};
@@ -147,6 +151,7 @@ class SignalProtocolManager {
     required CryptoSecureStorage secureStorage,
     SecurityEventBus? securityEventBus,
   })  : _cryptoStorage = CryptoStorage(secureStorage: secureStorage),
+        _secureStorage = secureStorage,
         _eventBus = securityEventBus {
     _senderKeyManager = SenderKeyManager(cryptoStorage: _cryptoStorage);
   }
@@ -182,6 +187,15 @@ class SignalProtocolManager {
   /// }
   /// ```
   Future<bool> initialize() async {
+    // Warn if storage backend is insecure
+    if (_secureStorage.securityLevel == StorageSecurityLevel.insecure) {
+      _eventBus?.emitType(SecurityEventType.insecureStorageWarning);
+      CryptoDebugLogger.log(
+        'SECURITY',
+        'WARNING: Insecure storage backend detected',
+      );
+    }
+
     final existing = await _cryptoStorage.getIdentityKeyPair();
     if (existing != null) {
       CryptoDebugLogger.log('INIT', 'Identity key pair already exists');
@@ -190,6 +204,7 @@ class SignalProtocolManager {
         'Identity public key',
         existing.publicKey,
       );
+      _seenNonces = await _cryptoStorage.loadSeenNonces();
       return false;
     }
 
@@ -421,6 +436,37 @@ class SignalProtocolManager {
         userId: recipientBundle.userId,
         deviceId: recipientBundle.deviceId,
       );
+    }
+
+    // ── First-session Kyber awareness ────────────────────────────────
+    if (previousCap == null && !bundleHasPqxdh) {
+      if (pqxdhPolicy == PqxdhPolicy.requirePq) {
+        CryptoDebugLogger.log(
+          'X3DH',
+          'BLOCKED: requirePq policy — first-contact bundle has no Kyber key.',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.firstSessionNoPqxdh,
+          sessionId:
+              _sessionKey(recipientBundle.userId, recipientBundle.deviceId),
+          metadata: {'policy': 'requirePq', 'action': 'session_refused'},
+        );
+        throw PqxdhDowngradeError(
+          userId: recipientBundle.userId,
+          deviceId: recipientBundle.deviceId,
+        );
+      } else if (pqxdhPolicy == PqxdhPolicy.preferPq) {
+        CryptoDebugLogger.log(
+          'X3DH',
+          'WARNING: First-contact bundle has no Kyber key. Proceeding without post-quantum protection.',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.firstSessionNoPqxdh,
+          sessionId:
+              _sessionKey(recipientBundle.userId, recipientBundle.deviceId),
+          metadata: {'policy': 'preferPq', 'action': 'proceeding_without_pq'},
+        );
+      }
     }
 
     // ── Peer identity key change detection ───────────────────────
@@ -1357,11 +1403,12 @@ class SignalProtocolManager {
       content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealedEnvelope,
         recipientIdentityKeyPair: identityKP,
+        seenNonces: _seenNonces,
       );
+      await _cryptoStorage.saveSeenNonces(_seenNonces);
     } catch (e) {
       final msg = e.toString();
-      if (msg.contains('nonce already seen') ||
-          msg.contains('replay window')) {
+      if (msg.contains('nonce already seen') || msg.contains('replay window')) {
         _eventBus?.emitType(
           SecurityEventType.replayRejected,
           metadata: {'source': 'sealed_sender', 'reason': msg},

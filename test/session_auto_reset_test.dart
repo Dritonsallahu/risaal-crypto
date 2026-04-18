@@ -639,8 +639,8 @@ void main() {
         identityKey: bobBundle2['identityKey'] as String,
         identitySigningKey: bobBundle2['identitySigningKey'] as String,
         signedPreKey: SignedPreKeyPublic(
-          keyId: (bobBundle2['signedPreKey']
-              as Map<String, dynamic>)['keyId'] as int,
+          keyId: (bobBundle2['signedPreKey'] as Map<String, dynamic>)['keyId']
+              as int,
           publicKey: (bobBundle2['signedPreKey']
               as Map<String, dynamic>)['publicKey'] as String,
           signature: (bobBundle2['signedPreKey']
@@ -688,8 +688,8 @@ void main() {
         identityKey: bobBundle2['identityKey'] as String,
         identitySigningKey: bobBundle2['identitySigningKey'] as String,
         signedPreKey: SignedPreKeyPublic(
-          keyId: (bobBundle2['signedPreKey']
-              as Map<String, dynamic>)['keyId'] as int,
+          keyId: (bobBundle2['signedPreKey'] as Map<String, dynamic>)['keyId']
+              as int,
           publicKey: (bobBundle2['signedPreKey']
               as Map<String, dynamic>)['publicKey'] as String,
           signature: (bobBundle2['signedPreKey']
@@ -750,8 +750,8 @@ void main() {
         identityKey: bobBundle2['identityKey'] as String,
         identitySigningKey: bobBundle2['identitySigningKey'] as String,
         signedPreKey: SignedPreKeyPublic(
-          keyId: (bobBundle2['signedPreKey']
-              as Map<String, dynamic>)['keyId'] as int,
+          keyId: (bobBundle2['signedPreKey'] as Map<String, dynamic>)['keyId']
+              as int,
           publicKey: (bobBundle2['signedPreKey']
               as Map<String, dynamic>)['publicKey'] as String,
           signature: (bobBundle2['signedPreKey']
@@ -797,8 +797,8 @@ void main() {
         identityKey: bobBundle['identityKey'] as String,
         identitySigningKey: bobBundle['identitySigningKey'] as String,
         signedPreKey: SignedPreKeyPublic(
-          keyId: (bobBundle['signedPreKey']
-              as Map<String, dynamic>)['keyId'] as int,
+          keyId: (bobBundle['signedPreKey'] as Map<String, dynamic>)['keyId']
+              as int,
           publicKey: (bobBundle['signedPreKey']
               as Map<String, dynamic>)['publicKey'] as String,
           signature: (bobBundle['signedPreKey']
@@ -822,8 +822,8 @@ void main() {
         identityKey: bobBundle2['identityKey'] as String,
         identitySigningKey: bobBundle2['identitySigningKey'] as String,
         signedPreKey: SignedPreKeyPublic(
-          keyId: (bobBundle2['signedPreKey']
-              as Map<String, dynamic>)['keyId'] as int,
+          keyId: (bobBundle2['signedPreKey'] as Map<String, dynamic>)['keyId']
+              as int,
           publicKey: (bobBundle2['signedPreKey']
               as Map<String, dynamic>)['publicKey'] as String,
           signature: (bobBundle2['signedPreKey']
@@ -861,8 +861,8 @@ void main() {
         identityKey: bobBundle['identityKey'] as String,
         identitySigningKey: bobBundle['identitySigningKey'] as String,
         signedPreKey: SignedPreKeyPublic(
-          keyId: (bobBundle['signedPreKey']
-              as Map<String, dynamic>)['keyId'] as int,
+          keyId: (bobBundle['signedPreKey'] as Map<String, dynamic>)['keyId']
+              as int,
           publicKey: (bobBundle['signedPreKey']
               as Map<String, dynamic>)['publicKey'] as String,
           signature: (bobBundle['signedPreKey']

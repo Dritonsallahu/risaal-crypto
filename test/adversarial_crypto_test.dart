@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cryptography/cryptography.dart' hide KeyPair;
 
+import 'package:risaal_crypto/src/double_ratchet.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/session_reset_errors.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
@@ -706,6 +707,47 @@ void main() {
 
         // Safety numbers should be different when identity key is different
         expect(correctSafetyNumber, isNot(equals(fakeSafetyNumber)));
+      });
+    });
+
+    // ── Group 8: Message Number Bounds ──────────────────────────────
+
+    group('Message Number Bounds', () {
+      test('message with msgNum > 100000 throws FormatException', () {
+        final json = {
+          'dhPublicKey': 'someKey',
+          'messageNumber': 100001,
+          'previousChainLength': 0,
+          'ciphertext': 'dGVzdA==',
+          'nonce': 'bm9uY2U=',
+        };
+        expect(
+          () => EncryptedMessage.fromJson(json),
+          throwsA(isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('exceeds maximum'),
+          )),
+        );
+      });
+
+      test('message with previousChainLength > 100000 throws FormatException',
+          () {
+        final json = {
+          'dhPublicKey': 'someKey',
+          'messageNumber': 5,
+          'previousChainLength': 100001,
+          'ciphertext': 'dGVzdA==',
+          'nonce': 'bm9uY2U=',
+        };
+        expect(
+          () => EncryptedMessage.fromJson(json),
+          throwsA(isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('exceeds maximum'),
+          )),
+        );
       });
     });
   });

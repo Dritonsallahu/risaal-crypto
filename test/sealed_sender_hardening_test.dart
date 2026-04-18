@@ -8,7 +8,7 @@ void main() {
   // ── Backwards compatibility ─────────────────────────────────────────
 
   group('Backwards compatibility', () {
-    test('unseal without new params still works (no regressions)', () async {
+    test('unseal with required seenNonces works correctly', () async {
       final senderKp = await SignalKeyHelper.generateX25519KeyPair();
       final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
 
@@ -26,10 +26,11 @@ void main() {
         recipientIdentityPublicKey: recipientKp.publicKey,
       );
 
-      // Unseal with no optional params — must work identically to before
+      // Unseal with required seenNonces
       final content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice-123');
@@ -82,6 +83,7 @@ void main() {
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
         knownSenderIdentityKeys: knownKeys,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice-123');
@@ -110,6 +112,7 @@ void main() {
           sealedEnvelope: sealed,
           recipientIdentityKeyPair: recipientKp,
           knownSenderIdentityKeys: knownKeys,
+          seenNonces: <String>{},
         ),
         throwsA(
           allOf(
@@ -146,6 +149,7 @@ void main() {
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
         knownSenderIdentityKeys: knownKeys,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'bob-456');
@@ -175,6 +179,7 @@ void main() {
           sealedEnvelope: sealed,
           recipientIdentityKeyPair: recipientKp,
           maxReplayWindowMs: 1000, // 1 second window
+          seenNonces: <String>{},
         ),
         throwsA(
           allOf(
@@ -204,6 +209,7 @@ void main() {
       final content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice');
@@ -228,6 +234,7 @@ void main() {
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
         maxReplayWindowMs: 60 * 60 * 1000, // 1 hour
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice');
@@ -318,7 +325,7 @@ void main() {
       expect(seenNonces.length, 2);
     });
 
-    test('seenNonces set is not mutated if unseal is not provided it',
+    test('fresh seenNonces set allows same envelope (no cross-contamination)',
         () async {
       final senderKp = await SignalKeyHelper.generateX25519KeyPair();
       final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
@@ -331,16 +338,18 @@ void main() {
         recipientIdentityPublicKey: recipientKp.publicKey,
       );
 
-      // Without seenNonces, replaying is allowed (backwards compat)
+      // Two independent seenNonces sets — same envelope should succeed in each
       final content1 = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
+        seenNonces: <String>{},
       );
       expect(content1.senderId, 'alice');
 
       final content2 = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
+        seenNonces: <String>{},
       );
       expect(content2.senderId, 'alice');
     });
@@ -368,6 +377,7 @@ void main() {
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
         validateServerToken: (token) => token == validToken,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice');
@@ -392,6 +402,7 @@ void main() {
           sealedEnvelope: sealed,
           recipientIdentityKeyPair: recipientKp,
           validateServerToken: (token) => token == 'real-token-xyz',
+          seenNonces: <String>{},
         ),
         throwsA(
           allOf(
@@ -424,6 +435,7 @@ void main() {
           sealedEnvelope: sealed,
           recipientIdentityKeyPair: recipientKp,
           validateServerToken: (token) => true,
+          seenNonces: <String>{},
         ),
         throwsA(
           allOf(
@@ -455,6 +467,7 @@ void main() {
       final content = await SealedSenderEnvelope.unseal(
         sealedEnvelope: sealed,
         recipientIdentityKeyPair: recipientKp,
+        seenNonces: <String>{},
       );
 
       expect(content.senderId, 'alice');

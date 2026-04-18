@@ -1,3 +1,15 @@
+/// Declares the security level of the storage backend.
+enum StorageSecurityLevel {
+  /// Hardware-backed: iOS Keychain (Secure Enclave), Android Keystore.
+  hardwareBacked,
+
+  /// Software-encrypted: EncryptedSharedPreferences, SQLCipher.
+  softwareEncrypted,
+
+  /// Insecure: plain SharedPreferences, in-memory Map (tests only).
+  insecure,
+}
+
 /// Abstract interface for secure key-value storage.
 ///
 /// This is the integration point between the crypto layer and the main app's
@@ -41,6 +53,11 @@
 ///   - [CryptoStorage] which wraps this interface with crypto-specific logic
 ///   - [SignalProtocolManager] which calls storage methods during crypto operations
 abstract class CryptoSecureStorage {
+  /// The security level of this storage backend.
+  ///
+  /// Implementations must declare their security level so the crypto layer
+  /// can warn when running on an insecure backend (e.g. in-memory Map).
+  StorageSecurityLevel get securityLevel;
   /// Write a key-value pair to secure storage.
   ///
   /// Called by the crypto layer to persist identity keys, sessions, pre-keys,

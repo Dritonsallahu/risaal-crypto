@@ -1,6 +1,6 @@
 name: risaal_crypto
 description: Military-grade Signal Protocol implementation in pure Dart. Includes X3DH, Double Ratchet, Sealed Sender, Sender Keys, Kyber-768 post-quantum hybrid, and LSB steganography.
-version: 0.2.1
+version: 0.3.0
 homepage: https://github.com/AnonDevBoss/risaal-crypto
 
 environment:
@@ -9,9 +9,10 @@ environment:
 dependencies:
   crypto: ^3.0.5
   cryptography: ^2.7.0
-  pqcrypto: ^0.1.0
+  pqcrypto: 0.1.0  # Pinned: pre-release, unaudited FFI binding. Review before updating.
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ">=5.0.0 <7.0.0"
+  flutter_lints: ^5.0.0
+  test: ^1.24.0

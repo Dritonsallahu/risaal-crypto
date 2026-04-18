@@ -54,6 +54,13 @@ enum SecurityEventType {
   /// Emitted by [SecurityAnomalyDetector] when event frequency exceeds
   /// configured thresholds. Metadata includes `pattern` and `count`.
   anomalyDetected,
+
+  /// First-contact session established without PQXDH (Kyber not in bundle).
+  /// Emitted under preferPq policy; under requirePq, session is refused.
+  firstSessionNoPqxdh,
+
+  /// Storage backend declared as insecure (plain SharedPreferences or in-memory).
+  insecureStorageWarning,
 }
 
 /// A single security event emitted by the crypto layer.
