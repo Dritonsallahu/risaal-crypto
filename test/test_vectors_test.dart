@@ -7,6 +7,7 @@ import 'package:risaal_crypto/src/double_ratchet.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/message_padding.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
+import 'package:risaal_crypto/src/sealed_sender.dart';
 import 'package:risaal_crypto/src/x3dh.dart';
 
 void main() {
@@ -786,6 +787,120 @@ void main() {
           'nonce': 'def',
         }),
         throwsA(isA<FormatException>()),
+      );
+    });
+  });
+
+  // ── Negative Test Vectors — Malformed Input Rejection ─────────────────
+  //
+  // Tests that our crypto implementations properly reject invalid input
+  // (wrong lengths, missing fields, excessive values) rather than silently
+  // processing garbage or crashing with unhelpful errors.
+  //
+  // Security rationale:
+  //   - Fail fast: invalid crypto input should throw immediately
+  //   - Clear errors: exceptions should indicate what was wrong
+  //   - No silent success: better to reject ambiguous input than proceed unsafely
+
+  group('Negative test vectors — malformed input rejection', () {
+    test('X3DH rejects wrong key length for identity key', () async {
+      // Generate valid keys for all other fields
+      final aliceIdentityKeyPair =
+          await SignalKeyHelper.generateIdentityKeyPair();
+      final bobSigningKeyPair = await SignalKeyHelper.generateSigningKeyPair();
+      final bobSignedPreKey =
+          await SignalKeyHelper.generateSignedPreKey(1, bobSigningKeyPair);
+
+      // Create a malformed identity key (16 bytes instead of 32)
+      final invalidIdentityKey =
+          base64Encode(List<int>.filled(16, 0x42)); // 16 bytes
+
+      // Create PreKeyBundle with the invalid identity key
+      final malformedBundle = PreKeyBundle(
+        userId: 'bob-user-id',
+        deviceId: 'bob-device-id',
+        identityKey: invalidIdentityKey, // WRONG LENGTH
+        identitySigningKey: bobSigningKeyPair.publicKey,
+        signedPreKey: SignedPreKeyPublic(
+          keyId: bobSignedPreKey.keyId,
+          publicKey: bobSignedPreKey.keyPair.publicKey,
+          signature: bobSignedPreKey.signature,
+        ),
+      );
+
+      // X3DH should reject this bundle during key agreement
+      await expectLater(
+        () => X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceIdentityKeyPair,
+          recipientBundle: malformedBundle,
+        ),
+        throwsA(anything), // Expect any exception (StateError, FormatException, etc.)
+      );
+    });
+
+    test('EncryptedMessage.fromJson rejects empty ciphertext', () {
+      // Empty ciphertext should fail validation
+      expect(
+        () => EncryptedMessage.fromJson({
+          'dhPublicKey': base64Encode(List<int>.filled(32, 0x01)),
+          'messageNumber': 0,
+          'previousChainLength': 0,
+          'ciphertext': '', // EMPTY
+          'nonce': base64Encode(List<int>.filled(12, 0x02)),
+        }),
+        throwsFormatException,
+      );
+    });
+
+    test('EncryptedMessage.fromJson rejects missing nonce', () {
+      // Missing nonce field should fail validation
+      expect(
+        () => EncryptedMessage.fromJson({
+          'dhPublicKey': base64Encode(List<int>.filled(32, 0x01)),
+          'messageNumber': 0,
+          'previousChainLength': 0,
+          'ciphertext': base64Encode(List<int>.filled(48, 0x03)),
+          // 'nonce': MISSING
+        }),
+        throwsFormatException,
+      );
+    });
+
+    test('SealedSenderEnvelope.unseal rejects truncated ciphertext',
+        () async {
+      // Generate a valid identity key pair for the recipient
+      final recipientIdentityKeyPair =
+          await SignalKeyHelper.generateIdentityKeyPair();
+
+      // Create a malformed sealed envelope with too-short ciphertext
+      final malformedEnvelope = {
+        'ephemeralPublicKey': base64Encode(List<int>.filled(32, 0x05)),
+        'ciphertext': base64Encode([0x00, 0x01, 0x02, 0x03]), // 4 bytes (TOO SHORT)
+        'nonce': base64Encode(List<int>.filled(12, 0x06)),
+      };
+
+      // Unseal should reject this truncated ciphertext
+      await expectLater(
+        () => SealedSenderEnvelope.unseal(
+          sealedEnvelope: malformedEnvelope,
+          recipientIdentityKeyPair: recipientIdentityKeyPair,
+          seenNonces: {},
+        ),
+        throwsA(anything), // Expect any exception during decryption
+      );
+    });
+
+    test('EncryptedMessage.fromJson rejects messageNumber > 100000', () {
+      // Excessive message numbers should be rejected to prevent DoS
+      expect(
+        () => EncryptedMessage.fromJson({
+          'dhPublicKey': base64Encode(List<int>.filled(32, 0x01)),
+          'messageNumber': 100001, // EXCEEDS MAX
+          'previousChainLength': 0,
+          'ciphertext': base64Encode(List<int>.filled(48, 0x03)),
+          'nonce': base64Encode(List<int>.filled(12, 0x02)),
+        }),
+        throwsFormatException,
       );
     });
   });
