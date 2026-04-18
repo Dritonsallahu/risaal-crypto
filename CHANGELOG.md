@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-18
+
+### Security Fixes (from external security analysis)
+
+- **[BREAKING] AES-256-CBC → AES-256-GCM** for Sender Key group encryption. Old CBC messages (v1) can still be decrypted for backward compatibility. New messages always use GCM (v2). Eliminates unauthenticated CBC and non-constant-time PKCS7 padding.
+- **[BREAKING] `seenNonces` now required** in `SealedSenderEnvelope.unseal()`. Prevents nonce replay attacks. Callers must supply a persistent `Set<String>`.
+- **[BREAKING] `RatchetState` keys migrated from `String` to `Uint8List`**. Enables genuine memory zeroing via `SecureMemory.zeroBytes()`. Stored sessions auto-migrate on first load.
+- **[BREAKING] `CryptoSecureStorage` now requires `securityLevel` getter**. Implementations must declare `StorageSecurityLevel.hardwareBacked`, `.softwareEncrypted`, or `.insecure`.
+- **Pinned `pqcrypto`** to exact version (pre-release, unaudited FFI binding).
+- **First-session Kyber downgrade protection**: `requirePq` policy now blocks first-contact sessions without Kyber; `preferPq` emits `firstSessionNoPqxdh` warning.
+- **Message number cap**: `messageNumber` and `previousChainLength` reject values > 100,000.
+
+### Documentation
+
+- Corrected deniability claims: group messages are non-deniable by design (Ed25519 signatures). 1-to-1 remains deniable.
+- Updated crypto primitives: group encryption is AES-256-GCM (not CBC).
+
+### Added
+
+- `SecurityEventType.firstSessionNoPqxdh` event type
+- `SecurityEventType.insecureStorageWarning` event type
+- `StorageSecurityLevel` enum
+- `CryptoStorage.saveSeenNonces()` / `loadSeenNonces()` for nonce persistence
+- Negative test vectors (malformed keys, truncated ciphertext, invalid nonces)
+
 ## [0.2.1] - 2026-04-07
 
 ### Fixed
