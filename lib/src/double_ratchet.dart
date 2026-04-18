@@ -87,8 +87,12 @@ class EncryptedMessage {
       throw const FormatException('Missing dhPublicKey');
     if (msgNum == null || msgNum < 0)
       throw const FormatException('Invalid messageNumber');
+    if (msgNum > 100000)
+      throw FormatException('Message number exceeds maximum: $msgNum');
     if (prevLen == null || prevLen < 0)
       throw const FormatException('Invalid previousChainLength');
+    if (prevLen > 100000)
+      throw FormatException('Previous chain length exceeds maximum: $prevLen');
     if (ct == null || ct.isEmpty)
       throw const FormatException('Missing ciphertext');
     if (nonce == null || nonce.isEmpty)
