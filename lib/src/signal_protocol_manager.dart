@@ -78,6 +78,7 @@ class SealedSenderResult {
 ///   - [SealedSenderEnvelope] for metadata protection
 class SignalProtocolManager {
   final CryptoStorage _cryptoStorage;
+  final CryptoSecureStorage _secureStorage;
 
   /// Stream-based security event bus for observability.
   ///
@@ -150,6 +151,7 @@ class SignalProtocolManager {
     required CryptoSecureStorage secureStorage,
     SecurityEventBus? securityEventBus,
   })  : _cryptoStorage = CryptoStorage(secureStorage: secureStorage),
+        _secureStorage = secureStorage,
         _eventBus = securityEventBus {
     _senderKeyManager = SenderKeyManager(cryptoStorage: _cryptoStorage);
   }
@@ -185,6 +187,15 @@ class SignalProtocolManager {
   /// }
   /// ```
   Future<bool> initialize() async {
+    // Warn if storage backend is insecure
+    if (_secureStorage.securityLevel == StorageSecurityLevel.insecure) {
+      _eventBus?.emitType(SecurityEventType.insecureStorageWarning);
+      CryptoDebugLogger.log(
+        'SECURITY',
+        'WARNING: Insecure storage backend detected',
+      );
+    }
+
     final existing = await _cryptoStorage.getIdentityKeyPair();
     if (existing != null) {
       CryptoDebugLogger.log('INIT', 'Identity key pair already exists');
@@ -425,6 +436,37 @@ class SignalProtocolManager {
         userId: recipientBundle.userId,
         deviceId: recipientBundle.deviceId,
       );
+    }
+
+    // ── First-session Kyber awareness ────────────────────────────────
+    if (previousCap == null && !bundleHasPqxdh) {
+      if (pqxdhPolicy == PqxdhPolicy.requirePq) {
+        CryptoDebugLogger.log(
+          'X3DH',
+          'BLOCKED: requirePq policy — first-contact bundle has no Kyber key.',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.firstSessionNoPqxdh,
+          sessionId:
+              _sessionKey(recipientBundle.userId, recipientBundle.deviceId),
+          metadata: {'policy': 'requirePq', 'action': 'session_refused'},
+        );
+        throw PqxdhDowngradeError(
+          userId: recipientBundle.userId,
+          deviceId: recipientBundle.deviceId,
+        );
+      } else if (pqxdhPolicy == PqxdhPolicy.preferPq) {
+        CryptoDebugLogger.log(
+          'X3DH',
+          'WARNING: First-contact bundle has no Kyber key. Proceeding without post-quantum protection.',
+        );
+        _eventBus?.emitType(
+          SecurityEventType.firstSessionNoPqxdh,
+          sessionId:
+              _sessionKey(recipientBundle.userId, recipientBundle.deviceId),
+          metadata: {'policy': 'preferPq', 'action': 'proceeding_without_pq'},
+        );
+      }
     }
 
     // ── Peer identity key change detection ───────────────────────

@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
+import 'package:risaal_crypto/src/security_event_bus.dart';
+import 'package:risaal_crypto/src/session_reset_errors.dart';
+import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 import 'package:risaal_crypto/src/x3dh.dart';
+
+import 'helpers/fake_secure_storage.dart';
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -541,6 +546,81 @@ void main() {
 
       expect(result.pqxdhUsed, isTrue);
       expect(result.kyberCiphertext, isNotNull);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Issue #5: First-Session Kyber Downgrade Protection
+  // ═══════════════════════════════════════════════════════════════════════
+
+  group('First-Session Kyber Downgrade Protection (Issue #5)', () {
+    test(
+        'first-contact + requirePq + no Kyber → throws PqxdhDowngradeError',
+        () async {
+      final storage = FakeSecureStorage();
+      final eventBus = SecurityEventBus();
+      final manager = SignalProtocolManager(
+        secureStorage: storage,
+        securityEventBus: eventBus,
+      );
+      await manager.initialize();
+
+      // Generate a classical bundle (no Kyber key)
+      final classical = await _generateClassicalBundle();
+
+      // createSession with requirePq should throw on first contact
+      expect(
+        () => manager.createSession(
+          classical.bundle,
+          pqxdhPolicy: PqxdhPolicy.requirePq,
+        ),
+        throwsA(isA<PqxdhDowngradeError>()),
+      );
+    });
+
+    test(
+        'first-contact + preferPq + no Kyber → emits firstSessionNoPqxdh, session proceeds',
+        () async {
+      final storage = FakeSecureStorage();
+      final eventBus = SecurityEventBus();
+      final manager = SignalProtocolManager(
+        secureStorage: storage,
+        securityEventBus: eventBus,
+      );
+      await manager.initialize();
+
+      // Generate a classical bundle (no Kyber key)
+      final classical = await _generateClassicalBundle();
+
+      // Collect events
+      final events = <SecurityEvent>[];
+      eventBus.events.listen(events.add);
+
+      // createSession with preferPq should proceed
+      await manager.createSession(
+        classical.bundle,
+        pqxdhPolicy: PqxdhPolicy.preferPq,
+      );
+
+      // Should have a session now
+      final hasSession = await manager.hasSession(
+        classical.bundle.userId,
+        classical.bundle.deviceId,
+      );
+      expect(hasSession, isTrue);
+
+      // Should have emitted firstSessionNoPqxdh event
+      expect(
+        events.any((e) => e.type == SecurityEventType.firstSessionNoPqxdh),
+        isTrue,
+      );
+
+      // Check metadata
+      final event = events.firstWhere(
+        (e) => e.type == SecurityEventType.firstSessionNoPqxdh,
+      );
+      expect(event.metadata['policy'], equals('preferPq'));
+      expect(event.metadata['action'], equals('proceeding_without_pq'));
     });
   });
 }
