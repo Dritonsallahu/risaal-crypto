@@ -6,6 +6,9 @@ class FakeSecureStorage implements CryptoSecureStorage {
   final Map<String, String> _store = {};
 
   @override
+  StorageSecurityLevel get securityLevel => StorageSecurityLevel.insecure;
+
+  @override
   Future<void> write({required String key, required String value}) async {
     _store[key] = value;
   }
