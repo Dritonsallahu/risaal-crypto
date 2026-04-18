@@ -642,6 +642,10 @@ class SenderKeyManager {
     List<int> blob,
     List<int> key,
   ) async {
+    // Minimum: version(1) + nonce(12) + ciphertext(1+) + mac(16) = 30
+    if (blob.length < 30) {
+      throw FormatException('GCM blob too short: ${blob.length} < 30 bytes');
+    }
     // Strip version byte (already checked by caller)
     final nonce = blob.sublist(1, 13); // 12 bytes
     final mac = Mac(blob.sublist(blob.length - 16)); // last 16 bytes
