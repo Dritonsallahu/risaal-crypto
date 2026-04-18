@@ -36,7 +36,7 @@ This document specifies the cryptographic protocol implemented by the `risaal_cr
 1. **End-to-End Encryption**: Messages are encrypted on the sender's device and decrypted only on the recipient's device
 2. **Forward Secrecy**: Compromise of long-term keys does not compromise past session keys
 3. **Post-Compromise Security**: Sessions self-heal after key compromise through DH ratcheting
-4. **Deniable Authentication**: No cryptographic proof that a specific user sent a message
+4. **Deniable Authentication (1-to-1)**: No cryptographic proof that a specific user sent a 1-to-1 message. Group messages use non-repudiable Ed25519 sender signatures for stronger authentication.
 5. **Metadata Protection**: Server cannot determine message sender (Sealed Sender)
 6. **Post-Quantum Resistance**: Hybrid X25519+Kyber-768 key agreement resists quantum attacks
 7. **Anti-Traffic Analysis**: Uniform ciphertext sizes hide message content type
@@ -1576,7 +1576,7 @@ This section summarizes all cryptographic algorithms used in the protocol.
 
 4. **Session State Size**: Skipped message keys are stored indefinitely (up to 100). Large gaps in message numbers can exhaust memory.
 
-5. **No Deniable Group Messaging**: Sender Keys use HMAC authentication with a static signing key, which is repudiable but not cryptographically deniable. Consider implementing MPCs (Multi-Party Computation) signatures.
+5. **Non-Deniable Group Messaging (by design)**: Sender Keys use Ed25519 digital signatures for strong sender authentication. This is non-deniable — recipients can prove sender identity to third parties. This trade-off provides stronger integrity and non-repudiation guarantees for group contexts where sender verification is critical. 1-to-1 messages remain deniable via symmetric HMAC-based authentication.
 
 6. **Kyber Key Lifetime**: Kyber pre-keys rotate every 30 days. Shorter rotation (e.g., 7 days) would improve post-quantum forward secrecy.
 
