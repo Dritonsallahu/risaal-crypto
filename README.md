@@ -273,13 +273,18 @@ flutter test --reporter expanded
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Component dependency graphs, sequence diagrams (Mermaid), storage architecture, threading model, and integration guide |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting, threat model, security invariants, and cryptographic dependency audit status |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development guidelines, testing requirements, PR process, and security-sensitive file list |
+| [docs/SECURITY_GOALS.md](docs/SECURITY_GOALS.md) | Measurable security goals and acceptance criteria |
+| [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md) | Protocol versioning, compatibility, and migration policy |
+| [docs/METADATA_PRIVACY_MODEL.md](docs/METADATA_PRIVACY_MODEL.md) | Metadata guarantees, residual leakage, and privacy roadmap |
+| [docs/ASSURANCE_SCORECARD.md](docs/ASSURANCE_SCORECARD.md) | Objective benchmark scorecard and competitor comparison matrix |
+| [docs/BUG_BOUNTY.md](docs/BUG_BOUNTY.md) | Responsible disclosure rewards and safe-harbor policy |
 | [example/](example/) | Runnable examples: [basic messaging](example/basic_messaging.dart), [sealed sender](example/sealed_sender.dart), [group E2EE](example/group_messaging.dart), [safety numbers](example/safety_numbers.dart), [key generation](example/key_generation.dart) |
 
 ---
 
 ## Known Limitations
 
-- **No formal security audit.** This library has not been audited by a third-party cryptography firm. Use at your own risk in production systems.
+- **No completed formal security audit yet.** Audit scope and schedule exist in `docs/AUDIT_SCOPE.md`, but third-party findings are not yet published.
 - **Kyber-768 is research-grade.** The `pqcrypto` FFI bindings have not undergone NIST certification. The hybrid design ensures that even if Kyber breaks, X25519 alone provides full security.
 - **Dart VM does not guarantee constant-time operations.** Side-channel resistance depends on the underlying `cryptography` package and VM behavior.
 - **Steganography is obscurity, not security.** LSB embedding can be detected by statistical steganalysis tools. It provides plausible deniability, not cryptographic hiding.

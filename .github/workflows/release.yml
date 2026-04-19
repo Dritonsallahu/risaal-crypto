@@ -114,6 +114,20 @@ jobs:
           echo "=== SHA256SUMS ==="
           cat SHA256SUMS
 
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft version
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p sbom
+          syft dir:. -o cyclonedx-json=sbom/risaal_crypto-$VERSION.sbom.cdx.json
+          sha256sum sbom/risaal_crypto-$VERSION.sbom.cdx.json >> SHA256SUMS
+          echo "=== Updated SHA256SUMS (with SBOM) ==="
+          cat SHA256SUMS
+
       - name: Generate attestation for source archive
         uses: actions/attest-build-provenance@v4
         with:
@@ -121,6 +135,7 @@ jobs:
             risaal_crypto-${{ steps.version.outputs.version }}.tar.gz
             risaal_crypto-${{ steps.version.outputs.version }}.zip
             SHA256SUMS
+            sbom/risaal_crypto-${{ steps.version.outputs.version }}.sbom.cdx.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -145,13 +160,15 @@ jobs:
 
             ### Security
 
-            - All CI gates passed (analyze, format, tests, adversarial, SAST, dependency audit)
-            - Coverage thresholds met (85% global, 95% critical crypto files)
-            - Build provenance attestation attached
+             - All CI gates passed (analyze, format, tests, adversarial, SAST, dependency audit)
+             - Coverage thresholds met (85% global, 95% critical crypto files)
+             - Build provenance attestation attached
+             - CycloneDX SBOM generated and published with release assets
           files: |
             risaal_crypto-${{ steps.version.outputs.version }}.tar.gz
             risaal_crypto-${{ steps.version.outputs.version }}.zip
             SHA256SUMS
+            sbom/risaal_crypto-${{ steps.version.outputs.version }}.sbom.cdx.json
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
         env:
