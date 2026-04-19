@@ -103,6 +103,16 @@ A review MUST be requested when:
 |------|------|----------|---------|
 | 2026-04 | Informal peer review | — | In progress (this review) |
 
+
+### Publication & Re-Audit Policy
+
+- Full audit reports (or maximum-detail public summaries when legal constraints apply) MUST be published after remediation planning.
+- Every finding must have a tracked remediation item and closure evidence in CHANGELOG/release notes.
+- A re-audit MUST be scheduled when:
+  - protocol wire formats change,
+  - core key agreement/ratchet primitives are modified, or
+  - a high/critical cryptographic vulnerability is fixed.
+
 ### Next Milestones
 
 - **Q2 2026:** Complete informal peer review, address all findings

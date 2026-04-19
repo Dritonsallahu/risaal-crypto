@@ -190,6 +190,12 @@ Security-relevant changes are documented in `CHANGELOG.md` with a `[SECURITY]` p
 - **[docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md)** — Key compromise playbook, protocol bug response, coordinated disclosure
 - **[docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md)** — Production telemetry integration, release signing controls, incident drill procedures
 - **[docs/AUDIT_SCOPE.md](docs/AUDIT_SCOPE.md)** — Scope document for third-party security audit
+- **[docs/SECURITY_GOALS.md](docs/SECURITY_GOALS.md)** — Measurable security goals and acceptance criteria
+- **[docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md)** — Protocol versioning and compatibility rules
+- **[docs/METADATA_PRIVACY_MODEL.md](docs/METADATA_PRIVACY_MODEL.md)** — Explicit metadata guarantees, leakage model, and roadmap
+- **[docs/ASSURANCE_SCORECARD.md](docs/ASSURANCE_SCORECARD.md)** — Objective scoring matrix and benchmark tracking
+- **[docs/BUG_BOUNTY.md](docs/BUG_BOUNTY.md)** — Responsible disclosure rewards policy
+- **[docs/TRANSPARENCY_REPORT_TEMPLATE.md](docs/TRANSPARENCY_REPORT_TEMPLATE.md)** — Quarterly transparency report template
 
 ### Operational Security
 - **[docs/security/SLO_DEFINITIONS.md](docs/security/SLO_DEFINITIONS.md)** — Stability and security SLOs with measurement methodology and breach escalation

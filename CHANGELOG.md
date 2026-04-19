@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Security assurance artifacts: `docs/SECURITY_GOALS.md`, `docs/PROTOCOL_COMPATIBILITY.md`, `docs/METADATA_PRIVACY_MODEL.md`
+- Operational trust artifacts: `docs/BUG_BOUNTY.md`, `docs/ASSURANCE_SCORECARD.md`, `docs/TRANSPARENCY_REPORT_TEMPLATE.md`
+- Third-party audit lifecycle hardening: report publication and re-audit trigger policy in `docs/AUDIT_SCOPE.md`
+
+### Changed
+- Documentation index updates in `README.md` and `SECURITY.md` to surface assurance and transparency materials
+
 ## [0.3.0] - 2026-04-18
 
 ### Security Fixes (from external security analysis)
