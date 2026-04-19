@@ -35,11 +35,11 @@ If a vulnerability is being **actively exploited**:
 
 | Version | Supported          | Status |
 | ------- | ------------------ | ------ |
-| 0.2.x   | Yes                | Current |
-| 0.1.x   | Security fixes only| Previous |
-| < 0.1   | No                 | Pre-release |
+| 0.3.x   | Yes                | Current |
+| 0.2.x   | Security fixes only| Previous |
+| < 0.2   | No                 | Pre-release |
 
-Only the latest 0.2.x version receives full updates. 0.1.x receives critical security patches only. Please upgrade to the latest version before reporting issues.
+Only the latest 0.3.x version receives full updates. 0.2.x receives critical security patches only. Please upgrade to the latest version before reporting issues.
 
 ## Threat Model
 
@@ -106,7 +106,7 @@ These invariants MUST hold at all times. Violations are security bugs:
 |---------|---------|-----------|-------------|
 | `cryptography` | ^2.7.0 | X25519, Ed25519, AES-256-GCM, HKDF-SHA256, HMAC-SHA256 | Community-reviewed, widely used |
 | `crypto` | ^3.0.3 | SHA-256, SHA-512 | Maintained by Dart team |
-| `pqcrypto` | ^0.1.0 | ML-KEM-768 (Kyber-768) via FFI | Research-grade, not production-audited |
+| `pqcrypto` | 0.1.0 | ML-KEM-768 (Kyber-768) via FFI | Research-grade, not production-audited |
 
 ### Dependency Security Notes
 
@@ -185,6 +185,7 @@ Security-relevant changes are documented in `CHANGELOG.md` with a `[SECURITY]` p
 ## Related Documentation
 
 ### Core Security Docs
+- **[docs/REMAINING_ISSUES.md](docs/REMAINING_ISSUES.md)** — Known security gaps, severity, status, and planned resolutions
 - **[docs/MEMORY_SAFETY.md](docs/MEMORY_SAFETY.md)** — Complete memory safety model, Dart GC constraints, FFI mitigations, residual risks
 - **[docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md)** — Key compromise playbook, protocol bug response, coordinated disclosure
 - **[docs/OPERATIONAL_RUNBOOK.md](docs/OPERATIONAL_RUNBOOK.md)** — Production telemetry integration, release signing controls, incident drill procedures

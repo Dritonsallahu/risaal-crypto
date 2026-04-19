@@ -117,6 +117,7 @@ These risks are inherent to the Dart platform and cannot be fully eliminated:
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
 | GC stale copies | Medium | FFI zeroing reduces window; `SecureBuffer` for long-lived keys avoids GC entirely |
+| DH sending key pair String residue | Medium | `_dhRatchetStep` generates a new X25519 key pair whose `KeyPair.privateKey` is a base64 `String`. Dart `String` is immutable and cannot be zeroed — the private key bytes persist on the Dart heap until GC reclaims the page. The serialized `Uint8List` copy is zeroed, but the original `String` representation is structurally unwipeable. Mitigation: minimize key pair lifetime; future fix requires upstream `cryptography` package to expose raw `Uint8List` key pairs. |
 | JIT dead-store elimination | Low | Volatile FFI writes prevent optimizer removal of zero-writes |
 | Timing side channels | Low | Not exploitable remotely; local attacker has easier paths (memory dump) |
 | Swap/hibernation pages | Low | OS-level; recommend device encryption + no swap on mobile |

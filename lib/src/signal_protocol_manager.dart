@@ -189,6 +189,14 @@ class SignalProtocolManager {
   Future<bool> initialize() async {
     // Warn if storage backend is insecure
     if (_secureStorage.securityLevel == StorageSecurityLevel.insecure) {
+      // Always print to console so developers see this even without event bus
+      // ignore: avoid_print
+      print(
+        '[risaal_crypto] ⚠ SECURITY WARNING: Insecure storage backend detected. '
+        'Key material is NOT protected by hardware-backed keystore. '
+        'Use a CryptoSecureStorage with StorageSecurityLevel.hardwareBacked '
+        'or .softwareEncrypted for production.',
+      );
       _eventBus?.emitType(SecurityEventType.insecureStorageWarning);
       CryptoDebugLogger.log(
         'SECURITY',
