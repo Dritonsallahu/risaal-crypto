@@ -224,10 +224,11 @@ void main() {
       final enc1 = await manager.encrypt(groupId, plaintext);
       final enc2 = await manager.encrypt(groupId, plaintext);
 
-      // v2 format: IV field is empty, nonce is embedded in ciphertext blob
-      // Different nonces (bytes 1-12 of ciphertext blob)
-      final nonce1 = base64Decode(enc1.ciphertext).sublist(1, 13);
-      final nonce2 = base64Decode(enc2.ciphertext).sublist(1, 13);
+      // v3 format: IV field is empty, nonce is embedded in ciphertext blob.
+      // Layout: [0x03, epoch(4 LE @1..5), nonce(12 @5..17), ct, mac].
+      // The nonce slice starts at offset 5 (after the version + epoch bytes).
+      final nonce1 = base64Decode(enc1.ciphertext).sublist(5, 17);
+      final nonce2 = base64Decode(enc2.ciphertext).sublist(5, 17);
       expect(nonce1, isNot(equals(nonce2)));
       // Different ciphertexts (because of nonce and chain key ratchet)
       expect(enc1.ciphertext, isNot(enc2.ciphertext));
@@ -532,9 +533,13 @@ void main() {
         utf8.encode('Original message'),
       );
 
-      // Tamper with the nonce bytes inside the ciphertext blob (bytes 1-12)
+      // Tamper with the nonce bytes inside the ciphertext blob.
+      // v3 layout: [0x03, epoch(4 LE @1..5), nonce(12 @5..17), ct, mac].
+      // Flipping a byte in 5..17 changes the signature input, so Ed25519
+      // verification fails (epoch bytes 1..5 are left intact so we exercise
+      // the signature path, not the earlier epoch-mismatch path).
       final ctBytes = base64Decode(encrypted.ciphertext);
-      ctBytes[2] ^= 0xFF; // Flip a nonce byte
+      ctBytes[6] ^= 0xFF; // Flip a nonce byte (offset 6 = nonce region in v3)
       final tamperedMessage = SenderKeyMessage(
         iteration: encrypted.iteration,
         ciphertext: base64Encode(ctBytes),
@@ -757,8 +762,8 @@ void main() {
     });
   });
 
-  group('SenderKeyManager GCM v2 format', () {
-    test('encrypt produces v2 GCM format with version byte 0x02', () async {
+  group('SenderKeyManager GCM v3 format', () {
+    test('encrypt produces v3 GCM format with version byte 0x03', () async {
       final (manager, _) = await _createManager('alice');
       const groupId = 'group-gcm';
 
@@ -767,15 +772,16 @@ void main() {
 
       final message = await manager.encrypt(groupId, plaintext);
 
-      // The ciphertext should start with version byte 0x02 (GCM)
+      // v3 wire format embeds the epoch into AES-GCM AAD; the version byte
+      // is now 0x03 and the layout grew by 4 bytes for the epoch.
+      // Layout: version(1) + epoch(4 LE) + nonce(12) + ciphertext(N) + mac(16)
       final ctBytes = base64Decode(message.ciphertext);
-      expect(ctBytes[0], equals(0x02),
-          reason: 'First byte should be version 0x02 (GCM)');
-      // GCM blob: version(1) + nonce(12) + ciphertext(N) + mac(16)
-      expect(ctBytes.length, greaterThan(1 + 12 + 1 + 16));
+      expect(ctBytes[0], equals(0x03),
+          reason: 'First byte should be version 0x03 (GCM-v3 with epoch AAD)');
+      expect(ctBytes.length, greaterThan(1 + 4 + 12 + 1 + 16));
     });
 
-    test('iv field is empty in v2 format', () async {
+    test('iv field is empty in v3 format', () async {
       final (manager, _) = await _createManager('alice');
       const groupId = 'group-gcm';
 
