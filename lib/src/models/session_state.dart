@@ -162,11 +162,25 @@ class RatchetState {
             {},
       );
 
-  /// Decode a single field from its stored representation (base64 string)
-  /// to raw bytes.
+  /// Decode a single field from its stored representation to raw bytes.
+  ///
+  /// Two on-disk formats are accepted:
+  ///   - **v2 (current):** base64-encoded bytes — `base64Encode(rawBytes)`.
+  ///   - **v1 (legacy):** raw JSON string for `dhSendingKeyPair` only, e.g.
+  ///     `{"publicKey":"...","privateKey":"..."}`. v1 sessions stored this
+  ///     field as the JSON itself (not base64'd). When we see a value that
+  ///     starts with `{`, treat it as v1 and recover the bytes by UTF-8
+  ///     encoding the string. This avoids requiring all users to log out
+  ///     and re-establish sessions after the v1→v2 storage migration.
   static Uint8List _decodeField(dynamic value) {
     if (value is String) {
       if (value.isEmpty) return Uint8List(0);
+      // v1 legacy: dhSendingKeyPair was stored as raw JSON string. Other
+      // fields were always base64 in both v1 and v2, so the `{` check is
+      // safe — base64 alphabet does not contain `{`.
+      if (value.startsWith('{')) {
+        return Uint8List.fromList(utf8.encode(value));
+      }
       return Uint8List.fromList(base64Decode(value));
     }
     throw FormatException('Expected base64 string, got ${value.runtimeType}');

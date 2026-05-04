@@ -54,7 +54,8 @@ Provides end-to-end encryption with forward secrecy, post-compromise security, d
 | Traffic analysis resistance | Fixed bucket padding (256B, 1KB, 4KB, 16KB, 64KB, 256KB) | [message_padding_test.dart](test/message_padding_test.dart) |
 | Memory protection | FFI-based `volatile` secure wipe of key material | Platform-specific |
 | Integrity (1:1) | AES-256-GCM authenticated encryption | [double_ratchet_test.dart](test/double_ratchet_test.dart) |
-| Integrity (groups) | HMAC-SHA256 with Ed25519-signed distributions | [sender_key_test.dart](test/sender_key_test.dart) |
+| Integrity (groups, current v3) | AES-256-GCM AEAD with Ed25519 sender signatures and epoch bound into AAD | [sender_key_test.dart](test/sender_key_test.dart) |
+| Integrity (groups, legacy v1, read-only) | AES-256-CBC + HMAC-SHA256 — kept for decrypt-side compatibility only | sender_key.dart |
 
 ---
 
@@ -235,22 +236,39 @@ For component dependency graphs, data flow sequence diagrams, and integration gu
 
 ## Test Suite
 
-222 tests across 12 test files covering protocol correctness, adversarial scenarios, and edge cases.
+456 test invocations across 24 test files covering protocol correctness, adversarial scenarios, key lifecycle, downgrade resistance, sealed-sender hardening, observability, memory hygiene, and steganography. Counts can be reproduced locally with:
 
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| `adversarial_crypto_test.dart` | 55 | Bit-flips, replay attacks, cross-session isolation, key reuse detection |
-| `signal_protocol_manager_test.dart` | 27 | Full protocol flow, sealed sender, group E2EE, session management |
-| `double_ratchet_test.dart` | 28 | Encrypt/decrypt, out-of-order delivery, DH ratchet steps, max skip |
-| `sender_key_test.dart` | 24 | Group key generation, multi-member, chain ratchet, HMAC verification |
-| `message_padding_test.dart` | 22 | Bucket selection, round-trips, randomness, boundary conditions |
-| `x3dh_test.dart` | 18 | Key agreement, signature verification, PQXDH hybrid, wrong key rejection |
-| `sealed_sender_test.dart` | 14 | Seal/unseal, metadata hiding, replay window, wrong key rejection |
-| `crypto_storage_test.dart` | 11 | Key persistence, session serialization, pending prekey tracking, wipe |
-| `key_helper_test.dart` | 8 | X25519, Ed25519, Kyber-768 key generation, signing, verification |
-| `safety_number_test.dart` | 6 | Determinism, commutativity, format, QR payload round-trip |
-| `stego_service_test.dart` | 5 | Embed/extract, capacity limits, visual imperceptibility |
-| `session_auto_reset_test.dart` | 4 | Session reset errors, rate limiting, cooldown, recovery |
+```bash
+find test -name "*.dart" | wc -l                       # 24 files
+grep -rE "^\s*test\(" test | wc -l                     # 456 invocations
+```
+
+Highlight files (full inventory in `test/`):
+
+| Test File | Coverage |
+|-----------|----------|
+| `adversarial_crypto_test.dart` | Bit-flips, replay, cross-session isolation, key reuse |
+| `cross_device_robustness_test.dart` | Multi-device scenarios and key sync |
+| `crypto_storage_test.dart` | Key persistence, serialization, cleanup |
+| `double_ratchet_test.dart` | Encrypt/decrypt, OOO delivery, DH ratchet, max skip |
+| `fuzz_test.dart` | Property-based fuzzing |
+| `key_helper_test.dart` | X25519, Ed25519, Kyber-768 generation, signing |
+| `key_lifecycle_test.dart` | SPK/Kyber rotation, OTP replenishment, age validation |
+| `memory_hygiene_test.dart` | Memory zeroing, no plaintext leakage |
+| `message_padding_test.dart` | Bucket selection, round-trips, randomness |
+| `safety_number_test.dart` | Fingerprint generation, determinism |
+| `sealed_sender_hardening_test.dart` | Metadata hiding under attack |
+| `sealed_sender_test.dart` | Seal/unseal, replay window |
+| `security_observability_test.dart` | Event bus emissions, security logging |
+| `sender_key_auth_test.dart` | Ed25519 signature verification in groups (v3) |
+| `sender_key_epoch_test.dart` | Epoch tracking under membership changes |
+| `sender_key_test.dart` | Group key generation, multi-member, chain ratchet (v3 GCM) |
+| `session_auto_reset_test.dart` | Session recovery, reset rate limiting |
+| `signal_protocol_manager_test.dart` | Full protocol flow, sealed sender, group E2EE |
+| `stego_service_test.dart` | LSB steganography, capacity, imperceptibility |
+| `test_vectors_test.dart` | Cross-compatibility, spec compliance |
+| `x3dh_hardening_test.dart` | Downgrade attacks, PQXDH verification |
+| `x3dh_test.dart` | Basic key agreement, signature verification |
 
 ```bash
 # Run all tests

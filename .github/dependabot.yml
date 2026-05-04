@@ -19,6 +19,10 @@ updates:
       include: "scope"
 
   # GitHub Actions
+  # Workflows pin every action to a commit SHA (with a `# v<major>` comment).
+  # Dependabot will follow that pin style automatically — when a referenced
+  # action publishes a new release, dependabot opens a PR that swaps the SHA
+  # and updates the trailing comment. Do NOT switch back to `@v<major>` tags.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

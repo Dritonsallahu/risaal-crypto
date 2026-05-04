@@ -484,14 +484,17 @@ void main() {
       expect(result.sharedSecret, equals(bobSecret));
     });
 
-    test('pqxdhUsed is false when no Kyber key available (default policy)',
+    test('pqxdhUsed is false when no Kyber key available under preferPq',
         () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final classical = await _generateClassicalBundle();
 
+      // The library default is now requirePq; this test specifically exercises
+      // the preferPq fallback, so we opt in explicitly.
       final result = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: classical.bundle,
+        pqxdhPolicy: PqxdhPolicy.preferPq,
       );
 
       expect(result.pqxdhUsed, isFalse);

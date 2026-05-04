@@ -66,13 +66,17 @@ class X3DH {
   /// 6. SK  = HKDF(DH1 || DH2 || DH3 [|| DH4])
   ///
   /// The [pqxdhPolicy] controls post-quantum Kyber handling:
-  ///   - [PqxdhPolicy.requirePq]: Abort if Kyber fails or is unavailable
+  ///   - [PqxdhPolicy.requirePq] (default): Abort if Kyber fails or is unavailable
   ///   - [PqxdhPolicy.preferPq]: Use Kyber if available, degrade with warning
   ///   - [PqxdhPolicy.classicalOnly]: Skip Kyber entirely
+  ///
+  /// The default is [PqxdhPolicy.requirePq] so that every new session is
+  /// hybrid by construction. Callers that legitimately need to interoperate
+  /// with peers missing a Kyber key must opt into [preferPq] explicitly.
   static Future<X3DHResult> initiateKeyAgreement({
     required KeyPair identityKeyPair,
     required PreKeyBundle recipientBundle,
-    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.preferPq,
+    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.requirePq,
   }) async {
     // Verify the signed pre-key signature using the recipient's Ed25519
     // signing key. Verification is mandatory — bundles without a signing
@@ -201,9 +205,13 @@ class X3DH {
   ///
   /// The [pqxdhPolicy] controls post-quantum Kyber handling on the
   /// responder side (mirrors the initiator's policy):
-  ///   - [PqxdhPolicy.requirePq]: Abort if Kyber decapsulation fails
+  ///   - [PqxdhPolicy.requirePq] (default): Abort if Kyber decapsulation fails
   ///   - [PqxdhPolicy.preferPq]: Degrade with warning if Kyber fails
   ///   - [PqxdhPolicy.classicalOnly]: Ignore Kyber ciphertext
+  ///
+  /// The default is [PqxdhPolicy.requirePq]: a missing or invalid Kyber
+  /// ciphertext aborts the handshake rather than silently producing a
+  /// classical-only session.
   static Future<List<int>> respondKeyAgreement({
     required KeyPair identityKeyPair,
     required SignedPreKey signedPreKey,
@@ -212,7 +220,7 @@ class X3DH {
     required String senderEphemeralKey,
     KyberKeyPair? kyberKeyPair,
     String? kyberCiphertext,
-    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.preferPq,
+    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.requirePq,
   }) async {
     final ikB = await _buildKeyPair(identityKeyPair);
     final spkB = await _buildKeyPair(signedPreKey.keyPair);

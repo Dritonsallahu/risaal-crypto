@@ -19,9 +19,9 @@ jobs:
     name: Static Analysis
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
 
@@ -36,9 +36,9 @@ jobs:
     name: Format Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
 
@@ -63,9 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [analyze, format]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
 
@@ -91,9 +91,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [analyze, format]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
 
@@ -118,9 +118,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [analyze]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
 
@@ -215,9 +215,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [analyze]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
 
@@ -285,7 +285,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [analyze]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Semgrep
         run: pip install semgrep
@@ -313,7 +313,7 @@ jobs:
           echo "=== Semgrep scan complete ==="
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         if: always()
         with:
           sarif_file: semgrep-results.sarif
@@ -326,7 +326,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
@@ -338,3 +338,60 @@ jobs:
             echo "FAIL: CHANGELOG.md must be updated for every PR"
             exit 1
           fi
+
+  # ── Signed-Commits Gate (PRs only) ─────────────────────────────────────
+  # Every commit a PR introduces (i.e. not already on main) must be signed
+  # AND verified by GitHub. This is a forward-looking policy — historical
+  # main commits are grandfathered. Crypto-library provenance demands that
+  # every change has a cryptographic chain back to a known maintainer.
+  signed-commits:
+    name: Signed-Commits Verification
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify all PR commits are signed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -e
+          echo "=== Signed-Commits Verification ==="
+          # Commits introduced by this PR — those not on the base branch.
+          mapfile -t COMMITS < <(git rev-list --reverse "origin/${BASE_REF}..HEAD")
+          if [ "${#COMMITS[@]}" -eq 0 ]; then
+            echo "PASS: PR introduces no new commits"
+            exit 0
+          fi
+          echo "Checking ${#COMMITS[@]} commit(s) for valid signatures..."
+          UNVERIFIED=()
+          for sha in "${COMMITS[@]}"; do
+            STATUS=$(gh api "repos/${REPO}/commits/${sha}" \
+              --jq '.commit.verification | "\(.verified) reason=\(.reason)"')
+            VERIFIED=$(echo "$STATUS" | awk '{print $1}')
+            short=${sha:0:12}
+            if [ "$VERIFIED" = "true" ]; then
+              echo "  ${short} ✓ signed"
+            else
+              echo "  ${short} ✗ ${STATUS}"
+              UNVERIFIED+=("$sha")
+            fi
+          done
+          if [ "${#UNVERIFIED[@]}" -gt 0 ]; then
+            echo ""
+            echo "FAIL: ${#UNVERIFIED[@]} unsigned/unverified commit(s) in this PR."
+            echo ""
+            echo "Configure GPG or SSH commit signing per docs/security/BRANCH_PROTECTION.md."
+            echo "Then either:"
+            echo "  • amend each commit (git rebase -i --exec 'git commit --amend --no-edit -S')"
+            echo "  • or re-create the branch with signing enabled"
+            exit 1
+          fi
+          echo ""
+          echo "PASS: All ${#COMMITS[@]} commit(s) are signed and verified by GitHub."

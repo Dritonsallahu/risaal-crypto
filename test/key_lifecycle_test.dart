@@ -701,6 +701,7 @@ void main() {
         final signedPreKey = bobBundle['signedPreKey'] as Map<String, dynamic>;
         final oneTimePreKeys = bobBundle['oneTimePreKeys'] as List<dynamic>;
         final firstOtp = oneTimePreKeys.first as Map<String, dynamic>;
+        final kyberPreKey = bobBundle['kyberPreKey'] as Map<String, dynamic>;
 
         final bundle = PreKeyBundle(
           userId: 'bob-id',
@@ -715,6 +716,10 @@ void main() {
           oneTimePreKey: OneTimePreKeyPublic(
             keyId: firstOtp['keyId'] as int,
             publicKey: firstOtp['publicKey'] as String,
+          ),
+          kyberPreKey: KyberPreKeyPublic(
+            keyId: kyberPreKey['keyId'] as int,
+            publicKey: kyberPreKey['publicKey'] as String,
           ),
         );
 
@@ -774,6 +779,12 @@ void main() {
         oneTimePreKey: OneTimePreKeyPublic(
           keyId: firstOtp['keyId'] as int,
           publicKey: firstOtp['publicKey'] as String,
+        ),
+        kyberPreKey: KyberPreKeyPublic(
+          keyId: (bobBundle['kyberPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle['kyberPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
         ),
       );
 
@@ -865,6 +876,12 @@ void main() {
         oneTimePreKey: OneTimePreKeyPublic(
           keyId: firstOtp['keyId'] as int,
           publicKey: firstOtp['publicKey'] as String,
+        ),
+        kyberPreKey: KyberPreKeyPublic(
+          keyId: (bobBundle['kyberPreKey']
+              as Map<String, dynamic>)['keyId'] as int,
+          publicKey: (bobBundle['kyberPreKey']
+              as Map<String, dynamic>)['publicKey'] as String,
         ),
       );
 

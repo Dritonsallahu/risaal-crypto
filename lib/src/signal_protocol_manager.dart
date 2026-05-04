@@ -99,6 +99,16 @@ class SignalProtocolManager {
     _sessions.clear();
   }
 
+  /// Logout-grade wipe: drop every piece of in-memory state held by this
+  /// manager. Persistent secure-storage keys are wiped separately by the
+  /// caller (via prefix scan over `crypto_*`) — we deliberately do NOT call
+  /// `_cryptoStorage.wipeAll()` here because the underlying adapter shares
+  /// the app's secure storage and `clearAll()` would also nuke device_id
+  /// and onboarding flags.
+  void wipeAll() {
+    _sessions.clear();
+  }
+
   /// Sender Key manager for group E2EE.
   late final SenderKeyManager _senderKeyManager;
 
@@ -257,9 +267,11 @@ class SignalProtocolManager {
       'Generated ${oneTimePreKeys.length} one-time pre-keys',
     );
 
-    // Kyber (ML-KEM-768) — post-quantum key encapsulation
-    // Wrapped in try/catch: if the pqcrypto FFI fails on this platform,
-    // we degrade to pure X25519 (no post-quantum protection).
+    // Kyber (ML-KEM-768) — post-quantum key encapsulation.
+    // Post-quantum protection is mandatory: if the FFI binding fails on
+    // this platform we abort initialize() rather than silently shipping a
+    // classical-only bundle. The caller should surface the error so the
+    // user understands the device can't host a Risaal session.
     try {
       final kyberKP = SignalKeyHelper.generateKyberKeyPair();
       await _cryptoStorage.saveKyberKeyPair(kyberKP);
@@ -274,8 +286,12 @@ class SignalProtocolManager {
     } catch (e) {
       CryptoDebugLogger.logError(
         'INIT',
-        'Kyber key generation failed — skipping post-quantum',
+        'Kyber key generation failed — aborting initialize()',
         e,
+      );
+      throw StateError(
+        'Kyber-768 key generation failed on this platform: $e. '
+        'Post-quantum protection is mandatory.',
       );
     }
 
@@ -324,7 +340,17 @@ class SignalProtocolManager {
       );
     }
 
-    final createdAtMs = await _cryptoStorage.getSignedPreKeyCreatedAt();
+    if (kyberKP == null) {
+      // PQ protection is mandatory: refuse to upload a bundle that would
+      // force peers into a classical-only handshake. Callers that catch
+      // this must surface a real error to the user — they CANNOT quietly
+      // proceed, because the server will reject the upload anyway.
+      throw StateError(
+        'Kyber key pair not found. Post-quantum protection is mandatory — '
+        're-run initialize() on a platform where Kyber key generation '
+        'succeeds, or bubble this error up to the UI.',
+      );
+    }
 
     return {
       'identityKey': identityKP.publicKey, // X25519 DH public key
@@ -337,9 +363,7 @@ class SignalProtocolManager {
       'oneTimePreKeys': oneTimePreKeys
           .map((k) => {'keyId': k.keyId, 'publicKey': k.keyPair.publicKey})
           .toList(),
-      if (kyberKP != null)
-        'kyberPreKey': {'keyId': 0, 'publicKey': kyberKP.publicKey},
-      'createdAt': createdAtMs ?? DateTime.now().millisecondsSinceEpoch,
+      'kyberPreKey': {'keyId': 0, 'publicKey': kyberKP.publicKey},
     };
   }
 
@@ -378,7 +402,7 @@ class SignalProtocolManager {
   /// ```
   Future<void> createSession(
     PreKeyBundle recipientBundle, {
-    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.preferPq,
+    PqxdhPolicy pqxdhPolicy = PqxdhPolicy.requirePq,
   }) async {
     CryptoDebugLogger.log('X3DH', '═══ Creating session (initiator/Alice) ═══');
     CryptoDebugLogger.log(

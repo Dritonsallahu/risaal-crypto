@@ -17,6 +17,9 @@ class InMemoryStorage implements CryptoSecureStorage {
   final _store = <String, String>{};
 
   @override
+  StorageSecurityLevel get securityLevel => StorageSecurityLevel.insecure;
+
+  @override
   Future<void> write({required String key, required String value}) async =>
       _store[key] = value;
 

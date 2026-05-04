@@ -20,6 +20,7 @@ All of the following CI jobs MUST pass before a PR can be merged to `main`:
 | Security Static Analysis (SAST) | No hardcoded secrets, no unsafe crypto patterns |
 | Semgrep SAST | No Semgrep rule violations in lib/ |
 | Changelog Updated | CHANGELOG.md updated in every PR |
+| Signed-Commits Verification | Every commit a PR introduces must be GPG/SSH signed and verified by GitHub |
 
 **Configuration:** Repository Settings → Branches → Branch protection rules → `main`
 - Require status checks to pass before merging: **Yes**
@@ -71,9 +72,28 @@ lib/src/key_helper.dart @Dritonsallahu
 
 ### 4. Signed Commits & Tags
 
-- **Require signed commits:** Recommended but not enforced (GPG signing requires local setup)
+- **Require signed commits:** **Yes — enforced in CI** by the `Signed-Commits Verification` job in [ci.yml](../../.github/workflows/ci.yml). Every commit a PR introduces (i.e. not already on the base branch) must be signed AND verified by GitHub. Historical commits on `main` predating this gate are grandfathered.
 - **Require linear history:** **Yes** (no merge commits, rebase-only)
 - **Require GPG-signed release tags:** **Yes** (enforced by release procedure below)
+
+**Local setup for contributors:**
+
+```bash
+# Option A — GPG (most portable)
+gpg --full-generate-key                        # 4096-bit RSA, no expiry or 2-year
+gpg --list-secret-keys --keyid-format=long     # find <KEY_ID>
+git config --global user.signingkey <KEY_ID>
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+gpg --armor --export <KEY_ID>                  # paste into github.com/settings/gpg/new
+
+# Option B — SSH (simpler, GitHub-native)
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+# Then add the same SSH public key as a Signing Key in github.com/settings/ssh/new
+```
 
 ### 5. Release Tag Signing
 
@@ -116,7 +136,7 @@ Both GPG tag signatures and GitHub Attestations provide independent verification
      - [x] Dismiss stale pull request approvals when new commits are pushed
    - [x] Require status checks to pass before merging
      - [x] Require branches to be up to date before merging
-     - Add all 8 CI jobs as required checks
+     - Add all 9 CI jobs as required checks (including Signed-Commits Verification)
    - [x] Require linear history
    - [x] Do not allow bypassing the above settings
    - [ ] Allow force pushes (UNCHECKED)

@@ -2,13 +2,13 @@
 
 ## Overview
 
-`risaal_crypto` is a standalone, platform-independent Dart package implementing the Signal Protocol with military-grade security extensions. It provides end-to-end encrypted messaging with forward secrecy, post-compromise security, deniable authentication, metadata protection, and post-quantum resistance.
+`risaal_crypto` is a standalone, platform-independent Dart package implementing the Signal Protocol with post-quantum and metadata-protection extensions. It provides end-to-end encrypted messaging with forward secrecy, post-compromise security, deniable authentication, metadata protection, and post-quantum resistance.
 
 **Key Features:**
 - **X3DH + PQXDH**: Extended Triple Diffie-Hellman key agreement with Kyber-768 hybrid post-quantum resistance
 - **Double Ratchet**: Forward secrecy and self-healing encryption using X25519 DH ratchet and AES-256-GCM
 - **Sealed Sender**: Metadata-hiding envelopes that prevent the server from learning who is messaging whom
-- **Sender Keys**: Efficient group encryption (encrypt once, decrypt N times) with AES-256-CBC + HMAC-SHA256
+- **Sender Keys (group encryption)**: encrypt once, decrypt N times. Current default is **v3 — AES-256-GCM with the epoch bound into AAD and per-message Ed25519 sender signatures**. Legacy v1 (AES-256-CBC + HMAC-SHA256) and v2 (AES-256-GCM without epoch) are kept read-only for decrypt-side compatibility with old payloads.
 - **Safety Numbers**: 60-digit numeric fingerprints for out-of-band identity verification
 - **Message Padding**: Fixed-size bucket padding to resist traffic analysis
 - **LSB Steganography**: AES-GCM encrypted hidden messages embedded in images
@@ -37,7 +37,7 @@ packages/risaal_crypto/
 │       ├── x3dh.dart                        # X3DH + PQXDH key agreement
 │       ├── double_ratchet.dart              # Double Ratchet (AES-256-GCM, DH ratchet, out-of-order)
 │       ├── sealed_sender.dart               # Metadata-hiding envelopes
-│       ├── sender_key.dart                  # Group E2EE (AES-256-CBC + HMAC-SHA256)
+│       ├── sender_key.dart                  # Group E2EE (v3: AES-256-GCM + Ed25519 + epoch; v1/v2 read-only)
 │       ├── signal_protocol_manager.dart     # High-level orchestrating API
 │       ├── safety_number.dart               # 60-digit fingerprint generation
 │       ├── message_padding.dart             # Fixed-size bucket padding (PADMÉ)
@@ -355,7 +355,9 @@ stateDiagram-v2
 
 ## Data Flow: Group Messaging
 
-Group encryption uses Sender Keys for efficiency:
+Group encryption uses Sender Keys for efficiency.
+
+> **Wire format note:** the diagram below describes the **legacy v1 sender-key flow** (AES-256-CBC + HMAC-SHA256) and is kept for historical context. The **current default is v3**: AES-256-GCM authenticated encryption, with the group epoch (incremented on membership change) bound into the AAD, and per-message Ed25519 sender signatures replacing the symmetric HMAC. v1 and v2 payloads remain decrypt-only for backward compatibility. See `lib/src/sender_key.dart:172-220` for the current wire format.
 
 ```mermaid
 sequenceDiagram

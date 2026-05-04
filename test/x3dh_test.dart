@@ -112,9 +112,13 @@ void main() {
         // No oneTimePreKey, no kyberPreKey
       );
 
+      // This test is about OPK absence, not Kyber absence. Explicitly use
+      // preferPq so we can still exercise the no-OPK classical path without
+      // tripping the default requirePq guard.
       final aliceResult = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: bundle,
+        pqxdhPolicy: PqxdhPolicy.preferPq,
       );
 
       final bobSharedSecret = await X3DH.respondKeyAgreement(
@@ -123,6 +127,7 @@ void main() {
         oneTimePreKey: null,
         senderIdentityKey: aliceKP.publicKey,
         senderEphemeralKey: aliceResult.ephemeralPublicKey,
+        pqxdhPolicy: PqxdhPolicy.preferPq,
       );
 
       expect(aliceResult.sharedSecret, equals(bobSharedSecret));

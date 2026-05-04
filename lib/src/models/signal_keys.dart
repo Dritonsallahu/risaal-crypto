@@ -6,10 +6,10 @@
 /// PQXDH to classical X25519-only key agreement.
 ///
 /// Security guidance:
-///   - Use [requirePq] in high-security contexts where post-quantum
-///     protection is mandatory (e.g., government, defense).
-///   - Use [preferPq] (default) for general use — provides PQ protection
-///     when available but allows fallback with a logged warning.
+///   - Use [requirePq] (default) for production — every new session is
+///     hybrid X25519+Kyber by construction; peers without Kyber are refused.
+///   - Use [preferPq] only when interop with legacy/classical-only peers is
+///     intentional and the caller has UX to surface the degradation.
 ///   - Use [classicalOnly] only for testing or known-incompatible peers.
 enum PqxdhPolicy {
   /// Require Kyber — abort session if PQ component fails or is unavailable.
@@ -18,14 +18,15 @@ enum PqxdhPolicy {
   ///   - The recipient's bundle has no Kyber pre-key
   ///   - Kyber encapsulation/decapsulation fails (FFI error, bad key, etc.)
   ///
-  /// Use this when post-quantum protection is non-negotiable.
+  /// This is the default. Post-quantum protection is non-negotiable for new
+  /// sessions established through this library.
   requirePq,
 
   /// Prefer Kyber — use if available, degrade with warning if not.
   ///
-  /// This is the default policy. If Kyber fails, the session is established
-  /// with X25519-only (classical security). A warning is logged via
-  /// [CryptoDebugLogger] so degradation is never silent.
+  /// If Kyber fails, the session is established with X25519-only (classical
+  /// security). A warning is logged via [CryptoDebugLogger] so degradation is
+  /// never silent.
   ///
   /// The caller should check [X3DHResult.pqxdhUsed] to know if PQ
   /// protection was applied.

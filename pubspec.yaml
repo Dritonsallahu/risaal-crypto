@@ -1,7 +1,7 @@
 name: risaal_crypto
-description: Military-grade Signal Protocol implementation in pure Dart. Includes X3DH, Double Ratchet, Sealed Sender, Sender Keys, Kyber-768 post-quantum hybrid, and LSB steganography.
+description: Signal Protocol implementation in pure Dart with PQXDH post-quantum hybrid key agreement. Includes X3DH/PQXDH, Double Ratchet, Sealed Sender, Sender Keys (AES-256-GCM v3 with epoch + Ed25519 signatures), and LSB steganography.
 version: 0.3.0
-homepage: https://github.com/AnonDevBoss/risaal-crypto
+homepage: https://github.com/Dritonsallahu/risaal-crypto
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
