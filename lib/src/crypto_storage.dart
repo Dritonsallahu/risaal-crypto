@@ -542,4 +542,35 @@ class CryptoStorage {
 
   /// Erase all crypto material from secure storage.
   Future<void> wipeAll() => _secureStorage.clearAll();
+
+  /// Surgical wipe for a fresh registration on the same device.
+  ///
+  /// Deletes only the *singleton* crypto material (identity, signing,
+  /// signed pre-key, one-time pre-keys, Kyber, next-id counter, previous-key
+  /// overlap entries, seen-nonce dedup set). Per-recipient state
+  /// (sessions, peer identities, peer capabilities, replay state,
+  /// sender keys, pending pre-keys, session-reset counters) is left
+  /// untouched because the storage interface does not expose key
+  /// enumeration — those entries become orphaned but harmless under the
+  /// new identity.
+  ///
+  /// Call this *before* [SignalProtocolManager.initialize] when the user
+  /// is creating a new account so [initialize] regenerates a fresh
+  /// 20-key bundle instead of replaying accumulated state from a
+  /// previous account on the same device.
+  Future<void> wipeForFreshRegistration() async {
+    await _secureStorage.delete(key: _keyIdentityKP);
+    await _secureStorage.delete(key: _keySigningKP);
+    await _secureStorage.delete(key: _keySignedPreKey);
+    await _secureStorage.delete(key: _keySignedPreKeyCreatedAt);
+    await _secureStorage.delete(key: _keyOneTimePreKeys);
+    await _secureStorage.delete(key: _keyKyberKP);
+    await _secureStorage.delete(key: _keyKyberCreatedAt);
+    await _secureStorage.delete(key: _keyNextPreKeyId);
+    await _secureStorage.delete(key: _keyPreviousSignedPreKey);
+    await _secureStorage.delete(key: _keyPreviousSpkExpiry);
+    await _secureStorage.delete(key: _keyPreviousKyberKP);
+    await _secureStorage.delete(key: _keyPreviousKyberExpiry);
+    await _secureStorage.delete(key: _keySeenNonces);
+  }
 }

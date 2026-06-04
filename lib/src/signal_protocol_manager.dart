@@ -109,6 +109,27 @@ class SignalProtocolManager {
     _sessions.clear();
   }
 
+  /// Surgical wipe for a fresh account registration on the same device.
+  ///
+  /// Deletes the singleton crypto material from secure storage (identity,
+  /// signing, signed pre-key, one-time pre-keys, Kyber, next-id counter,
+  /// previous-key overlap entries, seen-nonce dedup set) and drops
+  /// in-memory caches. Per-recipient state is left intact (the storage
+  /// interface does not expose enumeration); orphans are harmless under
+  /// the new identity and would only be reused if a peer with the same
+  /// `userId/deviceId` happens to start a session — in which case the
+  /// peer-identity-change detector flags the mismatch.
+  ///
+  /// Call this before [initialize] when the user is creating a new
+  /// account so [initialize] regenerates a fresh 20-key bundle instead
+  /// of replaying accumulated state from a previous account on the same
+  /// device.
+  Future<void> wipeForFreshRegistration() async {
+    _sessions.clear();
+    _seenNonces.clear();
+    await _cryptoStorage.wipeForFreshRegistration();
+  }
+
   /// Sender Key manager for group E2EE.
   late final SenderKeyManager _senderKeyManager;
 
@@ -150,6 +171,14 @@ class SignalProtocolManager {
 
   /// Number of one-time pre-keys to auto-generate when pool is low.
   static const int otpReplenishBatchSize = 100;
+
+  /// Hard cap on one-time pre-keys included in any single bundle uploaded
+  /// to the server. The server's [RegisterDto.oneTimePreKeys] validator
+  /// rejects bundles larger than 100. Local storage may legitimately hold
+  /// more (replenisher accumulates over time); [generateKeyBundle] trims
+  /// the upload payload to the most recent slice while keeping the full
+  /// set in storage so we can still answer X3DH from older keys.
+  static const int maxOneTimePreKeysPerBundle = 100;
 
   /// Grace period for key expiry checks to tolerate device clock drift.
   /// If a key appears expired by less than this amount, it's still treated
@@ -332,6 +361,7 @@ class SignalProtocolManager {
     }
 
     final kyberKP = await _cryptoStorage.getKyberKeyPair();
+    final createdAtMs = await _cryptoStorage.getSignedPreKeyCreatedAt();
 
     if (signingKP == null) {
       throw StateError(
@@ -360,10 +390,21 @@ class SignalProtocolManager {
         'publicKey': signedPreKey.keyPair.publicKey,
         'signature': signedPreKey.signature,
       },
-      'oneTimePreKeys': oneTimePreKeys
+      // Defensive cap: server rejects bundles with more than
+      // [maxOneTimePreKeysPerBundle] one-time pre-keys. Storage can grow
+      // beyond that if the replenisher accumulates over a long-lived
+      // account. Send the most recent slice — those are the keys most
+      // likely to still be live on the server. The full set remains in
+      // local storage so we can still answer X3DH from any of them.
+      'oneTimePreKeys': (oneTimePreKeys.length > maxOneTimePreKeysPerBundle
+              ? oneTimePreKeys.sublist(
+                  oneTimePreKeys.length - maxOneTimePreKeysPerBundle,
+                )
+              : oneTimePreKeys)
           .map((k) => {'keyId': k.keyId, 'publicKey': k.keyPair.publicKey})
           .toList(),
       'kyberPreKey': {'keyId': 0, 'publicKey': kyberKP.publicKey},
+      'createdAt': createdAtMs ?? DateTime.now().millisecondsSinceEpoch,
     };
   }
 

@@ -161,6 +161,54 @@ void main() {
       expect(firstOtp, containsPair('publicKey', isA<String>()));
     });
 
+    test(
+        'generateKeyBundle() caps oneTimePreKeys at maxOneTimePreKeysPerBundle',
+        () async {
+      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
+
+      // Push storage well past the cap by replenishing repeatedly.
+      // initialize() seeded 20; each call adds the requested batch.
+      // 20 + 50 + 50 + 50 = 170 keys in storage > 100 cap.
+      await manager.generateOneTimePreKeys(50);
+      await manager.generateOneTimePreKeys(50);
+      await manager.generateOneTimePreKeys(50);
+
+      final bundle = await manager.generateKeyBundle();
+      final otps = bundle['oneTimePreKeys'] as List<dynamic>;
+
+      expect(
+        otps.length,
+        SignalProtocolManager.maxOneTimePreKeysPerBundle,
+        reason:
+            'Server rejects bundles larger than 100; the manager must trim.',
+      );
+    });
+
+    test(
+        'wipeForFreshRegistration() lets initialize() generate a fresh 20-key bundle',
+        () async {
+      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
+
+      // Simulate accumulated state from a long-lived prior account.
+      await manager.generateOneTimePreKeys(150);
+      final priorBundle = await manager.generateKeyBundle();
+      final priorIdentity = priorBundle['identityKey'] as String;
+
+      await manager.wipeForFreshRegistration();
+      final isFreshInstall = await manager.initialize();
+      expect(isFreshInstall, isTrue);
+
+      final freshBundle = await manager.generateKeyBundle();
+      final freshOtps = freshBundle['oneTimePreKeys'] as List<dynamic>;
+
+      expect(freshOtps, hasLength(20));
+      expect(
+        freshBundle['identityKey'],
+        isNot(equals(priorIdentity)),
+        reason: 'A new identity must be generated after a wipe.',
+      );
+    });
+
     test('generateKeyBundle() throws if not initialized', () async {
       final storage = FakeSecureStorage();
       final manager = SignalProtocolManager(secureStorage: storage);

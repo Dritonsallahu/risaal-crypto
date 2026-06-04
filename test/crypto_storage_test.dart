@@ -591,4 +591,58 @@ void main() {
       );
     });
   });
+
+  group('CryptoStorage wipeForFreshRegistration', () {
+    test('Removes all singleton crypto material', () async {
+      // Seed every singleton entry the wipe targets.
+      final identityKP = await SignalKeyHelper.generateX25519KeyPair();
+      final signingKP = await SignalKeyHelper.generateSigningKeyPair();
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        1,
+        signingKP,
+      );
+      final oneTimeKeys =
+          await SignalKeyHelper.generateOneTimePreKeys(0, 5);
+
+      await cryptoStorage.saveIdentityKeyPair(identityKP);
+      await cryptoStorage.saveSigningKeyPair(signingKP);
+      await cryptoStorage.saveSignedPreKey(signedPreKey);
+      await cryptoStorage.saveSignedPreKeyCreatedAt(1234567890);
+      await cryptoStorage.saveOneTimePreKeys(oneTimeKeys);
+      await cryptoStorage.setNextPreKeyId(99);
+      await cryptoStorage.saveSeenNonces({'nonce-a', 'nonce-b'});
+
+      await cryptoStorage.wipeForFreshRegistration();
+
+      expect(await cryptoStorage.getIdentityKeyPair(), isNull);
+      expect(await cryptoStorage.getSigningKeyPair(), isNull);
+      expect(await cryptoStorage.getSignedPreKey(), isNull);
+      expect(await cryptoStorage.getSignedPreKeyCreatedAt(), isNull);
+      expect(await cryptoStorage.getOneTimePreKeys(), isEmpty);
+      expect(await cryptoStorage.getNextPreKeyId(), 0);
+      expect(await cryptoStorage.loadSeenNonces(), isEmpty);
+    });
+
+    test('Leaves per-recipient session state untouched', () async {
+      // Per-session state is not enumerable through CryptoSecureStorage,
+      // so the wipe deliberately leaves it in place. Document and lock
+      // that behaviour with a test so future changes are intentional.
+      final state = await createTestRatchetState();
+      await cryptoStorage.saveSession('peer-1', 'device-1', state);
+
+      // Also seed a singleton so we know the wipe ran.
+      final identityKP = await SignalKeyHelper.generateX25519KeyPair();
+      await cryptoStorage.saveIdentityKeyPair(identityKP);
+
+      await cryptoStorage.wipeForFreshRegistration();
+
+      expect(await cryptoStorage.getIdentityKeyPair(), isNull);
+      expect(
+        await cryptoStorage.getSession('peer-1', 'device-1'),
+        isNotNull,
+        reason:
+            'Per-recipient sessions are intentionally orphaned, not wiped.',
+      );
+    });
+  });
 }

@@ -13,6 +13,9 @@ import 'package:risaal_crypto/risaal_crypto.dart';
 
 // In-memory storage for demonstration
 class InMemoryStorage implements CryptoSecureStorage {
+  @override
+  StorageSecurityLevel get securityLevel => StorageSecurityLevel.insecure;
+
   final _store = <String, String>{};
 
   @override
