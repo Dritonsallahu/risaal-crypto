@@ -21,8 +21,11 @@ Shows how to hide sender metadata from the server:
 - The server can route messages but cannot determine who sent them
 - Only the recipient can unseal the outer envelope to discover the sender
 - Prevents social graph analysis even if the server is compromised
+- Sender Certificate v1: a certified send (`senderCertificate:`), and the
+  `UnverifiedFirstContactError` -> `peekSealedSender` -> `FirstContactApproval`
+  -> retry flow for an uncertified first contact
 
-**Concepts:** Metadata protection, privacy, sender anonymity
+**Concepts:** Metadata protection, privacy, sender anonymity, sender certificates
 
 ### 3. Group Messaging (`group_messaging.dart`)
 

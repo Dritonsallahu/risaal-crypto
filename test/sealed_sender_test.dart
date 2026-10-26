@@ -85,10 +85,7 @@ void main() {
         () => base64Decode(sealed['ciphertext'] as String),
         returnsNormally,
       );
-      expect(
-        () => base64Decode(sealed['nonce'] as String),
-        returnsNormally,
-      );
+      expect(() => base64Decode(sealed['nonce'] as String), returnsNormally);
 
       // Ephemeral public key should be 32 bytes (X25519)
       final ephPubBytes = base64Decode(sealed['ephemeralPublicKey'] as String);
@@ -127,34 +124,38 @@ void main() {
   // ── Uniqueness ─────────────────────────────────────────────────────
 
   group('SealedSenderEnvelope uniqueness', () {
-    test('sealing the same content twice produces different envelopes',
-        () async {
-      final senderKp = await SignalKeyHelper.generateX25519KeyPair();
-      final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
+    test(
+      'sealing the same content twice produces different envelopes',
+      () async {
+        final senderKp = await SignalKeyHelper.generateX25519KeyPair();
+        final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
 
-      final message = {'data': 'identical payload'};
+        final message = {'data': 'identical payload'};
 
-      final sealed1 = await SealedSenderEnvelope.seal(
-        senderId: 'alice',
-        senderDeviceId: 'dev-1',
-        senderIdentityKey: senderKp.publicKey,
-        encryptedMessage: message,
-        recipientIdentityPublicKey: recipientKp.publicKey,
-      );
+        final sealed1 = await SealedSenderEnvelope.seal(
+          senderId: 'alice',
+          senderDeviceId: 'dev-1',
+          senderIdentityKey: senderKp.publicKey,
+          encryptedMessage: message,
+          recipientIdentityPublicKey: recipientKp.publicKey,
+        );
 
-      final sealed2 = await SealedSenderEnvelope.seal(
-        senderId: 'alice',
-        senderDeviceId: 'dev-1',
-        senderIdentityKey: senderKp.publicKey,
-        encryptedMessage: message,
-        recipientIdentityPublicKey: recipientKp.publicKey,
-      );
+        final sealed2 = await SealedSenderEnvelope.seal(
+          senderId: 'alice',
+          senderDeviceId: 'dev-1',
+          senderIdentityKey: senderKp.publicKey,
+          encryptedMessage: message,
+          recipientIdentityPublicKey: recipientKp.publicKey,
+        );
 
-      // Different ephemeral keys mean different ciphertexts
-      expect(sealed1['ephemeralPublicKey'],
-          isNot(equals(sealed2['ephemeralPublicKey'])));
-      expect(sealed1['ciphertext'], isNot(equals(sealed2['ciphertext'])));
-    });
+        // Different ephemeral keys mean different ciphertexts
+        expect(
+          sealed1['ephemeralPublicKey'],
+          isNot(equals(sealed2['ephemeralPublicKey'])),
+        );
+        expect(sealed1['ciphertext'], isNot(equals(sealed2['ciphertext'])));
+      },
+    );
   });
 
   // ── Complex inner message ──────────────────────────────────────────

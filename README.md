@@ -23,7 +23,6 @@ Provides end-to-end encryption with forward secrecy, post-compromise security, d
 | [Sender Keys](PROTOCOL.md#6-sender-key-group-messaging) | Efficient group E2EE with chain ratchet | [Signal Docs](https://signal.org/docs/specifications/group-v2/) |
 | [Safety Numbers](PROTOCOL.md#7-safety-number-verification) | Out-of-band identity verification | [Signal Docs](https://signal.org/docs/specifications/fingerprint/) |
 | [Message Padding](PROTOCOL.md#8-message-padding) | Fixed-bucket traffic analysis resistance | Custom (based on PKCS#7 principles) |
-| [LSB Steganography](PROTOCOL.md#9-steganographic-messaging) | Covert communication in images | Custom (AES-256-GCM encrypted payloads) |
 | [Session Auto-Reset](PROTOCOL.md#11-session-auto-reset) | Transparent recovery from broken sessions | Custom (rate-limited re-negotiation) |
 
 ## Cryptographic Primitives
@@ -37,7 +36,7 @@ Provides end-to-end encryption with forward secrecy, post-compromise security, d
 | Key derivation | HKDF-SHA256 | `cryptography` ^2.7.0 |
 | Hash function | SHA-256, SHA-512 | `crypto` ^3.0.5 |
 | Message authentication | HMAC-SHA256 | `cryptography` ^2.7.0 |
-| Post-quantum KEM | Kyber-768 (ML-KEM-768) | `pqcrypto` ^0.1.0 (FFI) |
+| Post-quantum KEM | Kyber-768 (ML-KEM-768, FIPS 203) | `pqcrypto` 0.4.0 (pure Dart) |
 | Secure random | Platform CSPRNG | `dart:math` SecureRandom |
 
 ## Security Properties
@@ -52,7 +51,7 @@ Provides end-to-end encryption with forward secrecy, post-compromise security, d
 | Post-quantum resistance | Kyber-768 hybrid key agreement (PQXDH) | [x3dh_test.dart](test/x3dh_test.dart) |
 | Replay protection | Message numbers + skipped key tracking (max 100) | [adversarial_crypto_test.dart](test/adversarial_crypto_test.dart) |
 | Traffic analysis resistance | Fixed bucket padding (256B, 1KB, 4KB, 16KB, 64KB, 256KB) | [message_padding_test.dart](test/message_padding_test.dart) |
-| Memory protection | FFI-based `volatile` secure wipe of key material | Platform-specific |
+| Memory protection | Best-effort zeroing of package-owned key copies (Dart heap); library-internal copies are not wiped | [memory_hygiene_test.dart](test/memory_hygiene_test.dart), [secure_memory_zeroing_sites_test.dart](test/secure_memory_zeroing_sites_test.dart) |
 | Integrity (1:1) | AES-256-GCM authenticated encryption | [double_ratchet_test.dart](test/double_ratchet_test.dart) |
 | Integrity (groups, current v3) | AES-256-GCM AEAD with Ed25519 sender signatures and epoch bound into AAD | [sender_key_test.dart](test/sender_key_test.dart) |
 | Integrity (groups, legacy v1, read-only) | AES-256-CBC + HMAC-SHA256 — kept for decrypt-side compatibility only | sender_key.dart |
@@ -220,8 +219,7 @@ For component dependency graphs, data flow sequence diagrams, and integration gu
 |-------|---------|
 | `KeyHelper` | Key generation (X25519, Ed25519, Kyber, signing) |
 | `MessagePadding` | Fixed-bucket padding to resist traffic analysis |
-| `StegoService` | LSB steganography — hide encrypted text in images |
-| `SecureMemory` | FFI-based memory zeroing (prevents key recovery from RAM) |
+| `SecureMemory` | Best-effort zeroing of package-owned key copies (Dart heap); native `SecureBuffer` for host-managed keys |
 | `CryptoDebugLogger` | `assert()`-wrapped logging (stripped from release builds) |
 | `SessionResetError` / `SessionUnstableError` | Error types for session auto-recovery |
 
@@ -236,11 +234,11 @@ For component dependency graphs, data flow sequence diagrams, and integration gu
 
 ## Test Suite
 
-456 test invocations across 24 test files covering protocol correctness, adversarial scenarios, key lifecycle, downgrade resistance, sealed-sender hardening, observability, memory hygiene, and steganography. Counts can be reproduced locally with:
+Test suite covering protocol correctness, adversarial scenarios, key lifecycle, downgrade resistance, sealed-sender hardening, observability, and memory hygiene. Counts can be reproduced locally with:
 
 ```bash
-find test -name "*.dart" | wc -l                       # 24 files
-grep -rE "^\s*test\(" test | wc -l                     # 456 invocations
+find test -name "*.dart" | wc -l
+grep -rE "^\s*test\(" test | wc -l
 ```
 
 Highlight files (full inventory in `test/`):
@@ -265,7 +263,6 @@ Highlight files (full inventory in `test/`):
 | `sender_key_test.dart` | Group key generation, multi-member, chain ratchet (v3 GCM) |
 | `session_auto_reset_test.dart` | Session recovery, reset rate limiting |
 | `signal_protocol_manager_test.dart` | Full protocol flow, sealed sender, group E2EE |
-| `stego_service_test.dart` | LSB steganography, capacity, imperceptibility |
 | `test_vectors_test.dart` | Cross-compatibility, spec compliance |
 | `x3dh_hardening_test.dart` | Downgrade attacks, PQXDH verification |
 | `x3dh_test.dart` | Basic key agreement, signature verification |
@@ -295,7 +292,7 @@ flutter test --reporter expanded
 | [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md) | Protocol versioning, compatibility, and migration policy |
 | [docs/METADATA_PRIVACY_MODEL.md](docs/METADATA_PRIVACY_MODEL.md) | Metadata guarantees, residual leakage, and privacy roadmap |
 | [docs/ASSURANCE_SCORECARD.md](docs/ASSURANCE_SCORECARD.md) | Objective benchmark scorecard and competitor comparison matrix |
-| [docs/BUG_BOUNTY.md](docs/BUG_BOUNTY.md) | Responsible disclosure rewards and safe-harbor policy |
+| [docs/BUG_BOUNTY.md](docs/BUG_BOUNTY.md) | Vulnerability disclosure and safe-harbor policy (no paid bounty during pre-release) |
 | [example/](example/) | Runnable examples: [basic messaging](example/basic_messaging.dart), [sealed sender](example/sealed_sender.dart), [group E2EE](example/group_messaging.dart), [safety numbers](example/safety_numbers.dart), [key generation](example/key_generation.dart) |
 
 ---
@@ -306,7 +303,7 @@ flutter test --reporter expanded
 - **Kyber-768 is research-grade.** The `pqcrypto` FFI bindings have not undergone NIST certification. The hybrid design ensures that even if Kyber breaks, X25519 alone provides full security.
 - **Dart VM does not guarantee constant-time operations.** Side-channel resistance depends on the underlying `cryptography` package and VM behavior.
 - **Steganography is obscurity, not security.** LSB embedding can be detected by statistical steganalysis tools. It provides plausible deniability, not cryptographic hiding.
-- **Alpha release (0.1.0).** API surface may change between minor versions. Pin to exact version in `pubspec.yaml`.
+- **Version 0.4.0.** Pin to exact version in `pubspec.yaml`. See `CHANGELOG.md` for the full history of breaking changes.
 
 See [SECURITY.md](SECURITY.md) for the complete threat model and known limitations.
 

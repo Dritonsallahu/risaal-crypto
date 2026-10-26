@@ -139,25 +139,27 @@ void main() {
   // ── Formatted output ───────────────────────────────────────────────
 
   group('SafetyNumber formatted output', () {
-    test('formatted output has 12 groups of 5 digits separated by spaces',
-        () async {
-      final aliceKp = await SignalKeyHelper.generateX25519KeyPair();
-      final bobKp = await SignalKeyHelper.generateX25519KeyPair();
+    test(
+      'formatted output has 12 groups of 5 digits separated by spaces',
+      () async {
+        final aliceKp = await SignalKeyHelper.generateX25519KeyPair();
+        final bobKp = await SignalKeyHelper.generateX25519KeyPair();
 
-      final formatted = SafetyNumber.generateFormatted(
-        myUserId: 'alice',
-        myIdentityKey: aliceKp.publicKey,
-        theirUserId: 'bob',
-        theirIdentityKey: bobKp.publicKey,
-      );
+        final formatted = SafetyNumber.generateFormatted(
+          myUserId: 'alice',
+          myIdentityKey: aliceKp.publicKey,
+          theirUserId: 'bob',
+          theirIdentityKey: bobKp.publicKey,
+        );
 
-      final groups = formatted.split(' ');
-      expect(groups.length, 12);
-      for (final group in groups) {
-        expect(group.length, 5);
-        expect(RegExp(r'^\d{5}$').hasMatch(group), isTrue);
-      }
-    });
+        final groups = formatted.split(' ');
+        expect(groups.length, 12);
+        for (final group in groups) {
+          expect(group.length, 5);
+          expect(RegExp(r'^\d{5}$').hasMatch(group), isTrue);
+        }
+      },
+    );
   });
 
   // ── QR payload ─────────────────────────────────────────────────────
@@ -205,9 +207,13 @@ void main() {
       expect(SafetyNumber.parseQrPayload('invalid'), isNull);
       expect(SafetyNumber.parseQrPayload('risaal-verify:v0:short'), isNull);
       expect(
-          SafetyNumber.parseQrPayload('risaal-verify:v0:${'a' * 60}'), isNull);
+        SafetyNumber.parseQrPayload('risaal-verify:v0:${'a' * 60}'),
+        isNull,
+      );
       expect(
-          SafetyNumber.parseQrPayload('risaal-verify:v1:${'0' * 60}'), isNull);
+        SafetyNumber.parseQrPayload('risaal-verify:v1:${'0' * 60}'),
+        isNull,
+      );
     });
   });
 }

@@ -28,6 +28,11 @@ class FakeSecureStorage implements CryptoSecureStorage {
     _store.clear();
   }
 
+  @override
+  Future<void> clearAccountScopedValues() async {
+    _store.removeWhere((key, _) => key.startsWith('crypto_'));
+  }
+
   /// Reset all state between tests.
   void reset() {
     _store.clear();

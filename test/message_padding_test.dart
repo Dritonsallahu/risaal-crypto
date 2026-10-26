@@ -106,7 +106,8 @@ void main() {
         expect(
           buckets.contains(padded.length),
           isTrue,
-          reason: 'Padded length ${padded.length} for input length $len '
+          reason:
+              'Padded length ${padded.length} for input length $len '
               'is not a valid bucket size',
         );
       }

@@ -1,15 +1,20 @@
 name: risaal_crypto
 description: Signal Protocol implementation in pure Dart with PQXDH post-quantum hybrid key agreement. Includes X3DH/PQXDH, Double Ratchet, Sealed Sender, Sender Keys (AES-256-GCM v3 with epoch + Ed25519 signatures), and LSB steganography.
-version: 0.3.0
+version: 0.4.0
 homepage: https://github.com/Dritonsallahu/risaal-crypto
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.10.0 <4.0.0'
 
 dependencies:
-  crypto: ^3.0.5
-  cryptography: ^2.7.0
-  pqcrypto: 0.1.0  # Pinned: pre-release, unaudited FFI binding. Review before updating.
+  # Crypto deps are EXACT-pinned (no `^`) for supply-chain control: an
+  # auto-pulled update to a cryptographic primitive could silently change or
+  # backdoor behaviour. Bump deliberately + re-run the full crypto suite.
+  crypto: 3.0.7
+  cryptography: 2.9.0  # Pinned. Verify upstream release cadence (and evaluate a maintained fork) before bumping — separate reviewed task.
+  # Exact-pin the reviewed pure-Dart FIPS 203 implementation. Do not widen this
+  # range: ML-KEM wire/key compatibility is an explicit migration boundary.
+  pqcrypto: 0.4.0
 
 dev_dependencies:
   flutter_test:

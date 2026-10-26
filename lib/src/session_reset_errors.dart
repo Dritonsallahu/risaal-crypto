@@ -1,3 +1,17 @@
+/// Thrown when an encrypted message fails AEAD authentication.
+///
+/// The error is intentionally context-free. Peer identifiers, ciphertext,
+/// plaintext, and the provider exception must never cross this boundary via
+/// [toString]. The existing ratchet session remains untouched and can retry the
+/// authentic envelope or continue with a later valid message.
+class MessageAuthenticationError implements Exception {
+  const MessageAuthenticationError();
+
+  @override
+  String toString() =>
+      'MessageAuthenticationError: Encrypted message authentication failed.';
+}
+
 /// Thrown when a broken session was detected and auto-reset.
 ///
 /// The message that triggered the error is unrecoverable (AES-GCM MAC
@@ -29,10 +43,7 @@ class PqxdhDowngradeError implements Exception {
   final String userId;
   final String deviceId;
 
-  const PqxdhDowngradeError({
-    required this.userId,
-    required this.deviceId,
-  });
+  const PqxdhDowngradeError({required this.userId, required this.deviceId});
 
   @override
   String toString() =>

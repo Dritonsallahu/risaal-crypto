@@ -3,12 +3,40 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' hide KeyPair;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:risaal_crypto/src/crypto_protocol.dart';
 import 'package:risaal_crypto/src/double_ratchet.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/message_padding.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/sealed_sender.dart';
 import 'package:risaal_crypto/src/x3dh.dart';
+
+import 'helpers/crypto_test_fixtures.dart';
+
+Future<({KyberKeyPair pair, KyberPreKeyPublic publicKey})> _signedKem(
+  KeyPair signingKey,
+) async {
+  final pair = SignalKeyHelper.generateKyberKeyPair(keyId: 1);
+  final signature = await SignalKeyHelper.sign(
+    signingKey.privateKey,
+    RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+      keyId: pair.keyId!,
+      publicKey: pair.publicKey,
+    ),
+  );
+  return (
+    pair: pair,
+    publicKey: KyberPreKeyPublic(
+      keyId: pair.keyId!,
+      publicKey: pair.publicKey,
+      cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+      kemSuite: RisaalCryptoProtocol.kemSuite,
+      kemStandard: RisaalCryptoProtocol.kemStandard,
+      kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
+      signature: signature,
+    ),
+  );
+}
 
 void main() {
   // ── HKDF Test Vectors (RFC 5869) ─────────────────────────────────────
@@ -50,64 +78,67 @@ void main() {
     // Risaal uses HKDF with 32-byte output for X3DH (_deriveSecret) and
     // 64-byte output for Double Ratchet KDF_RK. These tests verify our
     // specific HKDF configurations produce deterministic, consistent output.
-    test('HKDF with Risaal X3DH parameters is deterministic (32-byte output)',
-        () async {
-      // Simulate X3DH: HKDF(dhConcat, "Risaal_X3DH", zero-salt)
-      final ikm = List<int>.filled(32, 0xAB);
-      final salt = Uint8List(32); // 32-byte zero salt per Signal spec
-      final info = 'Risaal_X3DH'.codeUnits;
+    test(
+      'HKDF with Risaal X3DH parameters is deterministic (32-byte output)',
+      () async {
+        // Simulate X3DH: HKDF(dhConcat, "Risaal_X3DH", zero-salt)
+        final ikm = List<int>.filled(32, 0xAB);
+        final salt = Uint8List(32); // 32-byte zero salt per Signal spec
+        final info = 'Risaal_X3DH'.codeUnits;
 
-      final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 32);
-      final derived1 = await hkdf.deriveKey(
-        secretKey: SecretKey(ikm),
-        nonce: salt,
-        info: info,
-      );
-      final bytes1 = await derived1.extractBytes();
+        final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 32);
+        final derived1 = await hkdf.deriveKey(
+          secretKey: SecretKey(ikm),
+          nonce: salt,
+          info: info,
+        );
+        final bytes1 = await derived1.extractBytes();
 
-      // Run again with the same inputs -- must match exactly
-      final derived2 = await hkdf.deriveKey(
-        secretKey: SecretKey(List<int>.filled(32, 0xAB)),
-        nonce: Uint8List(32),
-        info: 'Risaal_X3DH'.codeUnits,
-      );
-      final bytes2 = await derived2.extractBytes();
+        // Run again with the same inputs -- must match exactly
+        final derived2 = await hkdf.deriveKey(
+          secretKey: SecretKey(List<int>.filled(32, 0xAB)),
+          nonce: Uint8List(32),
+          info: 'Risaal_X3DH'.codeUnits,
+        );
+        final bytes2 = await derived2.extractBytes();
 
-      expect(bytes1.length, equals(32));
-      expect(bytes1, equals(bytes2));
-    });
+        expect(bytes1.length, equals(32));
+        expect(bytes1, equals(bytes2));
+      },
+    );
 
     test(
-        'HKDF with Risaal Ratchet parameters is deterministic (64-byte output)',
-        () async {
-      // Simulate Double Ratchet KDF_RK: HKDF(dhOutput, "Risaal_Ratchet", rootKey-as-salt)
-      final ikm = List<int>.filled(32, 0xCD);
-      final salt = Uint8List.fromList(List<int>.filled(32, 0xEF));
-      final info = 'Risaal_Ratchet'.codeUnits;
+      'HKDF with Risaal Ratchet parameters is deterministic (64-byte output)',
+      () async {
+        // Simulate Double Ratchet KDF_RK: HKDF(dhOutput, "Risaal_Ratchet", rootKey-as-salt)
+        final ikm = List<int>.filled(32, 0xCD);
+        final salt = Uint8List.fromList(List<int>.filled(32, 0xEF));
+        final info = 'Risaal_Ratchet'.codeUnits;
 
-      final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 64);
-      final derived1 = await hkdf.deriveKey(
-        secretKey: SecretKey(ikm),
-        nonce: salt,
-        info: info,
-      );
-      final bytes1 = await derived1.extractBytes();
+        final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 64);
+        final derived1 = await hkdf.deriveKey(
+          secretKey: SecretKey(ikm),
+          nonce: salt,
+          info: info,
+        );
+        final bytes1 = await derived1.extractBytes();
 
-      final derived2 = await hkdf.deriveKey(
-        secretKey: SecretKey(List<int>.filled(32, 0xCD)),
-        nonce: Uint8List.fromList(List<int>.filled(32, 0xEF)),
-        info: 'Risaal_Ratchet'.codeUnits,
-      );
-      final bytes2 = await derived2.extractBytes();
+        final derived2 = await hkdf.deriveKey(
+          secretKey: SecretKey(List<int>.filled(32, 0xCD)),
+          nonce: Uint8List.fromList(List<int>.filled(32, 0xEF)),
+          info: 'Risaal_Ratchet'.codeUnits,
+        );
+        final bytes2 = await derived2.extractBytes();
 
-      expect(bytes1.length, equals(64));
-      expect(bytes1, equals(bytes2));
+        expect(bytes1.length, equals(64));
+        expect(bytes1, equals(bytes2));
 
-      // First 32 bytes = root key, last 32 bytes = chain key -- must differ
-      final rootKey = bytes1.sublist(0, 32);
-      final chainKey = bytes1.sublist(32, 64);
-      expect(rootKey, isNot(equals(chainKey)));
-    });
+        // First 32 bytes = root key, last 32 bytes = chain key -- must differ
+        final rootKey = bytes1.sublist(0, 32);
+        final chainKey = bytes1.sublist(32, 64);
+        expect(rootKey, isNot(equals(chainKey)));
+      },
+    );
 
     test('different inputs produce different HKDF outputs', () async {
       final hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 32);
@@ -136,64 +167,60 @@ void main() {
 
   group('HMAC-SHA256 chain key derivation determinism', () {
     test(
-        'KDF_CK with known chain key produces deterministic message key and next chain key',
-        () async {
-      // Fixed 32-byte chain key (all 0x42)
-      final chainKey = List<int>.filled(32, 0x42);
+      'KDF_CK with known chain key produces deterministic message key and next chain key',
+      () async {
+        // Fixed 32-byte chain key (all 0x42)
+        final chainKey = List<int>.filled(32, 0x42);
 
-      final hmac = Hmac.sha256();
+        final hmac = Hmac.sha256();
 
-      // messageKey = HMAC(chainKey, 0x01)
-      final messageKeyMac = await hmac.calculateMac(
-        [0x01],
-        secretKey: SecretKey(chainKey),
-      );
+        // messageKey = HMAC(chainKey, 0x01)
+        final messageKeyMac = await hmac.calculateMac([
+          0x01,
+        ], secretKey: SecretKey(chainKey));
 
-      // newChainKey = HMAC(chainKey, 0x02)
-      final newChainKeyMac = await hmac.calculateMac(
-        [0x02],
-        secretKey: SecretKey(chainKey),
-      );
+        // newChainKey = HMAC(chainKey, 0x02)
+        final newChainKeyMac = await hmac.calculateMac([
+          0x02,
+        ], secretKey: SecretKey(chainKey));
 
-      final messageKey = messageKeyMac.bytes;
-      final newChainKey = newChainKeyMac.bytes;
+        final messageKey = messageKeyMac.bytes;
+        final newChainKey = newChainKeyMac.bytes;
 
-      // Both outputs should be 32 bytes
-      expect(messageKey.length, equals(32));
-      expect(newChainKey.length, equals(32));
+        // Both outputs should be 32 bytes
+        expect(messageKey.length, equals(32));
+        expect(newChainKey.length, equals(32));
 
-      // Verify they are different from each other
-      expect(messageKey, isNot(equals(newChainKey)));
+        // Verify they are different from each other
+        expect(messageKey, isNot(equals(newChainKey)));
 
-      // Run the same derivation again -- must produce identical output (deterministic)
-      final messageKeyMac2 = await hmac.calculateMac(
-        [0x01],
-        secretKey: SecretKey(List<int>.filled(32, 0x42)),
-      );
-      final newChainKeyMac2 = await hmac.calculateMac(
-        [0x02],
-        secretKey: SecretKey(List<int>.filled(32, 0x42)),
-      );
+        // Run the same derivation again -- must produce identical output (deterministic)
+        final messageKeyMac2 = await hmac.calculateMac([
+          0x01,
+        ], secretKey: SecretKey(List<int>.filled(32, 0x42)));
+        final newChainKeyMac2 = await hmac.calculateMac([
+          0x02,
+        ], secretKey: SecretKey(List<int>.filled(32, 0x42)));
 
-      expect(messageKeyMac2.bytes, equals(messageKey));
-      expect(newChainKeyMac2.bytes, equals(newChainKey));
+        expect(messageKeyMac2.bytes, equals(messageKey));
+        expect(newChainKeyMac2.bytes, equals(newChainKey));
 
-      // Record the exact expected values for regression
-      final messageKeyB64 = base64Encode(messageKey);
-      final newChainKeyB64 = base64Encode(newChainKey);
+        // Record the exact expected values for regression
+        final messageKeyB64 = base64Encode(messageKey);
+        final newChainKeyB64 = base64Encode(newChainKey);
 
-      // These are the deterministic outputs for chainKey = 32 bytes of 0x42.
-      // If these ever change, it means the HMAC implementation changed.
-      expect(messageKeyB64, isNotEmpty);
-      expect(newChainKeyB64, isNotEmpty);
+        // These are the deterministic outputs for chainKey = 32 bytes of 0x42.
+        // If these ever change, it means the HMAC implementation changed.
+        expect(messageKeyB64, isNotEmpty);
+        expect(newChainKeyB64, isNotEmpty);
 
-      // Verify chaining: derive from the new chain key and check it differs
-      final step2MessageMac = await hmac.calculateMac(
-        [0x01],
-        secretKey: SecretKey(newChainKey),
-      );
-      expect(step2MessageMac.bytes, isNot(equals(messageKey)));
-    });
+        // Verify chaining: derive from the new chain key and check it differs
+        final step2MessageMac = await hmac.calculateMac([
+          0x01,
+        ], secretKey: SecretKey(newChainKey));
+        expect(step2MessageMac.bytes, isNot(equals(messageKey)));
+      },
+    );
 
     test('KDF_CK chain advances deterministically over N steps', () async {
       final hmac = Hmac.sha256();
@@ -204,14 +231,12 @@ void main() {
 
       // Advance the chain 10 times
       for (var i = 0; i < 10; i++) {
-        final msgMac = await hmac.calculateMac(
-          [0x01],
-          secretKey: SecretKey(chainKey),
-        );
-        final nextMac = await hmac.calculateMac(
-          [0x02],
-          secretKey: SecretKey(chainKey),
-        );
+        final msgMac = await hmac.calculateMac([
+          0x01,
+        ], secretKey: SecretKey(chainKey));
+        final nextMac = await hmac.calculateMac([
+          0x02,
+        ], secretKey: SecretKey(chainKey));
         messageKeys.add(msgMac.bytes);
         chainKey = nextMac.bytes;
       }
@@ -230,14 +255,12 @@ void main() {
       // Re-run from the same starting key -- must produce identical sequence
       List<int> chainKey2 = List<int>.filled(32, 0xAA);
       for (var i = 0; i < 10; i++) {
-        final msgMac = await hmac.calculateMac(
-          [0x01],
-          secretKey: SecretKey(chainKey2),
-        );
-        final nextMac = await hmac.calculateMac(
-          [0x02],
-          secretKey: SecretKey(chainKey2),
-        );
+        final msgMac = await hmac.calculateMac([
+          0x01,
+        ], secretKey: SecretKey(chainKey2));
+        final nextMac = await hmac.calculateMac([
+          0x02,
+        ], secretKey: SecretKey(chainKey2));
         expect(
           msgMac.bytes,
           equals(messageKeys[i]),
@@ -251,198 +274,223 @@ void main() {
   // ── X3DH Determinism Test ────────────────────────────────────────────
 
   group('X3DH deterministic session establishment', () {
-    test('two parties derive the same shared secret from the same key material',
-        () async {
-      // Generate fixed key material for Alice and Bob
-      final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      /* aliceSigningKP not needed — Alice is the initiator, not the responder */
+    test(
+      'two parties derive the same shared secret from the same key material',
+      () async {
+        // Generate fixed key material for Alice and Bob
+        final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
+        /* aliceSigningKP not needed — Alice is the initiator, not the responder */
 
-      final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
-      final bobSignedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(0, bobSigningKP);
-      final bobOneTimePreKeys =
-          await SignalKeyHelper.generateOneTimePreKeys(0, 1);
+        final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
+        final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
+        final bobSignedPreKey = await SignalKeyHelper.generateSignedPreKey(
+          1,
+          bobSigningKP,
+        );
+        final bobOneTimePreKeys = await SignalKeyHelper.generateOneTimePreKeys(
+          1,
+          1,
+        );
+        final bobKem = await _signedKem(bobSigningKP);
 
-      // Build Bob's PreKeyBundle
-      final bobBundle = PreKeyBundle(
-        userId: 'bob',
-        deviceId: 'device-1',
-        identityKey: bobIdentityKP.publicKey,
-        identitySigningKey: bobSigningKP.publicKey,
-        signedPreKey: SignedPreKeyPublic(
-          keyId: bobSignedPreKey.keyId,
-          publicKey: bobSignedPreKey.keyPair.publicKey,
-          signature: bobSignedPreKey.signature,
-        ),
-        oneTimePreKey: OneTimePreKeyPublic(
-          keyId: bobOneTimePreKeys.first.keyId,
-          publicKey: bobOneTimePreKeys.first.keyPair.publicKey,
-        ),
-      );
+        // Build Bob's PreKeyBundle
+        final bobBundle = PreKeyBundle(
+          opkRoute: testOpkRoute,
+          userId: 'bob',
+          deviceId: 'device-1',
+          identityKey: bobIdentityKP.publicKey,
+          identitySigningKey: bobSigningKP.publicKey,
+          signedPreKey: SignedPreKeyPublic(
+            keyId: bobSignedPreKey.keyId,
+            publicKey: bobSignedPreKey.keyPair.publicKey,
+            signature: bobSignedPreKey.signature,
+          ),
+          oneTimePreKey: OneTimePreKeyPublic(
+            keyId: bobOneTimePreKeys.first.keyId,
+            publicKey: bobOneTimePreKeys.first.keyPair.publicKey,
+          ),
+          kyberPreKey: bobKem.publicKey,
+        );
 
-      // Alice performs X3DH (initiator)
-      final x3dhResult = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceIdentityKP,
-        recipientBundle: bobBundle,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
+        // Alice performs X3DH (initiator)
+        final x3dhResult = await X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceIdentityKP,
+          recipientBundle: bobBundle,
+        );
 
-      // Bob performs X3DH (responder)
-      final bobSharedSecret = await X3DH.respondKeyAgreement(
-        identityKeyPair: bobIdentityKP,
-        signedPreKey: bobSignedPreKey,
-        oneTimePreKey: bobOneTimePreKeys.first,
-        senderIdentityKey: aliceIdentityKP.publicKey,
-        senderEphemeralKey: x3dhResult.ephemeralPublicKey,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
+        // Bob performs X3DH (responder)
+        final bobSharedSecret = await X3DH.respondKeyAgreement(
+          identityKeyPair: bobIdentityKP,
+          signedPreKey: bobSignedPreKey,
+          oneTimePreKey: bobOneTimePreKeys.first,
+          senderIdentityKey: aliceIdentityKP.publicKey,
+          senderEphemeralKey: x3dhResult.ephemeralPublicKey,
+          kyberKeyPair: bobKem.pair,
+          kyberCiphertext: x3dhResult.kyberCiphertext!,
+          routing: x3dhResult.routing,
+        );
 
-      // Both should derive the same 32-byte shared secret
-      expect(x3dhResult.sharedSecret.length, equals(32));
-      expect(bobSharedSecret.length, equals(32));
-      expect(x3dhResult.sharedSecret, equals(bobSharedSecret));
-    });
-
-    test('X3DH without one-time pre-key also produces matching secrets',
-        () async {
-      final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
-      final bobSignedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(0, bobSigningKP);
-
-      // Bundle without one-time pre-key
-      final bobBundle = PreKeyBundle(
-        userId: 'bob',
-        deviceId: 'device-1',
-        identityKey: bobIdentityKP.publicKey,
-        identitySigningKey: bobSigningKP.publicKey,
-        signedPreKey: SignedPreKeyPublic(
-          keyId: bobSignedPreKey.keyId,
-          publicKey: bobSignedPreKey.keyPair.publicKey,
-          signature: bobSignedPreKey.signature,
-        ),
-      );
-
-      final x3dhResult = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceIdentityKP,
-        recipientBundle: bobBundle,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
-
-      final bobSharedSecret = await X3DH.respondKeyAgreement(
-        identityKeyPair: bobIdentityKP,
-        signedPreKey: bobSignedPreKey,
-        oneTimePreKey: null,
-        senderIdentityKey: aliceIdentityKP.publicKey,
-        senderEphemeralKey: x3dhResult.ephemeralPublicKey,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
-
-      expect(x3dhResult.sharedSecret, equals(bobSharedSecret));
-      expect(x3dhResult.usedOneTimePreKeyId, isNull);
-    });
+        // Both should derive the same 32-byte shared secret
+        expect(x3dhResult.sharedSecret.length, equals(32));
+        expect(bobSharedSecret.length, equals(32));
+        expect(x3dhResult.sharedSecret, equals(bobSharedSecret));
+      },
+    );
 
     test(
-        'different ephemeral keys produce different shared secrets (forward secrecy)',
-        () async {
-      final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
-      final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
-      final bobSignedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(0, bobSigningKP);
-      final bobOTPs = await SignalKeyHelper.generateOneTimePreKeys(0, 2);
+      'X3DH without one-time pre-key also produces matching secrets',
+      () async {
+        final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
+        final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
+        final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
+        final bobSignedPreKey = await SignalKeyHelper.generateSignedPreKey(
+          1,
+          bobSigningKP,
+        );
+        final bobKem = await _signedKem(bobSigningKP);
 
-      // First X3DH with OTP 0
-      final bundle1 = PreKeyBundle(
-        userId: 'bob',
-        deviceId: 'd1',
-        identityKey: bobIdentityKP.publicKey,
-        identitySigningKey: bobSigningKP.publicKey,
-        signedPreKey: SignedPreKeyPublic(
-          keyId: bobSignedPreKey.keyId,
-          publicKey: bobSignedPreKey.keyPair.publicKey,
-          signature: bobSignedPreKey.signature,
-        ),
-        oneTimePreKey: OneTimePreKeyPublic(
-          keyId: bobOTPs[0].keyId,
-          publicKey: bobOTPs[0].keyPair.publicKey,
-        ),
-      );
-      final result1 = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceIdentityKP,
-        recipientBundle: bundle1,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
+        // Bundle without one-time pre-key
+        final bobBundle = PreKeyBundle(
+          opkRoute: testOpkRoute,
+          userId: 'bob',
+          deviceId: 'device-1',
+          identityKey: bobIdentityKP.publicKey,
+          identitySigningKey: bobSigningKP.publicKey,
+          signedPreKey: SignedPreKeyPublic(
+            keyId: bobSignedPreKey.keyId,
+            publicKey: bobSignedPreKey.keyPair.publicKey,
+            signature: bobSignedPreKey.signature,
+          ),
+          kyberPreKey: bobKem.publicKey,
+        );
 
-      // Second X3DH with OTP 1 (different ephemeral key generated internally)
-      final bundle2 = PreKeyBundle(
-        userId: 'bob',
-        deviceId: 'd1',
-        identityKey: bobIdentityKP.publicKey,
-        identitySigningKey: bobSigningKP.publicKey,
-        signedPreKey: SignedPreKeyPublic(
-          keyId: bobSignedPreKey.keyId,
-          publicKey: bobSignedPreKey.keyPair.publicKey,
-          signature: bobSignedPreKey.signature,
-        ),
-        oneTimePreKey: OneTimePreKeyPublic(
-          keyId: bobOTPs[1].keyId,
-          publicKey: bobOTPs[1].keyPair.publicKey,
-        ),
-      );
-      final result2 = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceIdentityKP,
-        recipientBundle: bundle2,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
+        final x3dhResult = await X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceIdentityKP,
+          recipientBundle: bobBundle,
+        );
 
-      // Different ephemeral keys + different OTPs => different shared secrets
-      expect(result1.sharedSecret, isNot(equals(result2.sharedSecret)));
-      expect(
-        result1.ephemeralPublicKey,
-        isNot(equals(result2.ephemeralPublicKey)),
-      );
-    });
+        final bobSharedSecret = await X3DH.respondKeyAgreement(
+          identityKeyPair: bobIdentityKP,
+          signedPreKey: bobSignedPreKey,
+          oneTimePreKey: null,
+          senderIdentityKey: aliceIdentityKP.publicKey,
+          senderEphemeralKey: x3dhResult.ephemeralPublicKey,
+          kyberKeyPair: bobKem.pair,
+          kyberCiphertext: x3dhResult.kyberCiphertext!,
+          routing: x3dhResult.routing,
+        );
+
+        expect(x3dhResult.sharedSecret, equals(bobSharedSecret));
+        expect(x3dhResult.usedOneTimePreKeyId, isNull);
+      },
+    );
+
+    test(
+      'different ephemeral keys produce different shared secrets (forward secrecy)',
+      () async {
+        final aliceIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
+        final bobIdentityKP = await SignalKeyHelper.generateIdentityKeyPair();
+        final bobSigningKP = await SignalKeyHelper.generateSigningKeyPair();
+        final bobSignedPreKey = await SignalKeyHelper.generateSignedPreKey(
+          1,
+          bobSigningKP,
+        );
+        final bobOTPs = await SignalKeyHelper.generateOneTimePreKeys(1, 2);
+        final bobKem = await _signedKem(bobSigningKP);
+
+        // First X3DH with OTP 0
+        final bundle1 = PreKeyBundle(
+          opkRoute: testOpkRoute,
+          userId: 'bob',
+          deviceId: 'd1',
+          identityKey: bobIdentityKP.publicKey,
+          identitySigningKey: bobSigningKP.publicKey,
+          signedPreKey: SignedPreKeyPublic(
+            keyId: bobSignedPreKey.keyId,
+            publicKey: bobSignedPreKey.keyPair.publicKey,
+            signature: bobSignedPreKey.signature,
+          ),
+          oneTimePreKey: OneTimePreKeyPublic(
+            keyId: bobOTPs[0].keyId,
+            publicKey: bobOTPs[0].keyPair.publicKey,
+          ),
+          kyberPreKey: bobKem.publicKey,
+        );
+        final result1 = await X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceIdentityKP,
+          recipientBundle: bundle1,
+        );
+
+        // Second X3DH with OTP 1 (different ephemeral key generated internally)
+        final bundle2 = PreKeyBundle(
+          opkRoute: testOpkRoute,
+          userId: 'bob',
+          deviceId: 'd1',
+          identityKey: bobIdentityKP.publicKey,
+          identitySigningKey: bobSigningKP.publicKey,
+          signedPreKey: SignedPreKeyPublic(
+            keyId: bobSignedPreKey.keyId,
+            publicKey: bobSignedPreKey.keyPair.publicKey,
+            signature: bobSignedPreKey.signature,
+          ),
+          oneTimePreKey: OneTimePreKeyPublic(
+            keyId: bobOTPs[1].keyId,
+            publicKey: bobOTPs[1].keyPair.publicKey,
+          ),
+          kyberPreKey: bobKem.publicKey,
+        );
+        final result2 = await X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceIdentityKP,
+          recipientBundle: bundle2,
+        );
+
+        // Different ephemeral keys + different OTPs => different shared secrets
+        expect(result1.sharedSecret, isNot(equals(result2.sharedSecret)));
+        expect(
+          result1.ephemeralPublicKey,
+          isNot(equals(result2.ephemeralPublicKey)),
+        );
+      },
+    );
   });
 
   // ── Double Ratchet Determinism Test ──────────────────────────────────
 
   group('Double Ratchet deterministic behavior', () {
     test(
-        'encrypt with same initial state produces deterministic structure (but random nonces)',
-        () async {
-      // Derive a fixed shared secret
-      final sharedSecret = List<int>.filled(32, 0x55);
-      final recipientKP = await SignalKeyHelper.generateX25519KeyPair();
+      'encrypt with same initial state produces deterministic structure (but random nonces)',
+      () async {
+        // Derive a fixed shared secret
+        final sharedSecret = List<int>.filled(32, 0x55);
+        final recipientKP = await SignalKeyHelper.generateX25519KeyPair();
 
-      // Initialize sender ratchet
-      final ratchet = await DoubleRatchet.initSender(
-        sharedSecret: sharedSecret,
-        recipientPublicKey: recipientKP.publicKey,
-      );
+        // Initialize sender ratchet
+        final ratchet = await DoubleRatchet.initSender(
+          sharedSecret: sharedSecret,
+          recipientPublicKey: recipientKP.publicKey,
+        );
 
-      // Encrypt a message
-      final plaintext = utf8.encode('test message');
-      final padded = MessagePadding.pad(plaintext);
-      final encrypted = await ratchet.encrypt(padded);
+        // Encrypt a message
+        final plaintext = utf8.encode('test message');
+        final padded = MessagePadding.pad(plaintext);
+        final encrypted = await ratchet.encrypt(padded);
 
-      // Verify structure
-      expect(encrypted.dhPublicKey, isNotEmpty);
-      expect(encrypted.messageNumber, equals(0));
-      expect(encrypted.previousChainLength, equals(0));
-      expect(encrypted.ciphertext, isNotEmpty);
-      expect(encrypted.nonce, isNotEmpty);
+        // Verify structure
+        expect(encrypted.dhPublicKey, isNotEmpty);
+        expect(encrypted.messageNumber, equals(0));
+        expect(encrypted.previousChainLength, equals(0));
+        expect(encrypted.ciphertext, isNotEmpty);
+        expect(encrypted.nonce, isNotEmpty);
 
-      // Nonce should be 12 bytes (96 bits) base64-encoded
-      final nonceBytes = base64Decode(encrypted.nonce);
-      expect(nonceBytes.length, equals(12));
+        // Nonce should be 12 bytes (96 bits) base64-encoded
+        final nonceBytes = base64Decode(encrypted.nonce);
+        expect(nonceBytes.length, equals(12));
 
-      // Ciphertext should be padded plaintext + 16-byte GCM tag
-      final ctBytes = base64Decode(encrypted.ciphertext);
-      expect(ctBytes.length, equals(padded.length + 16));
-    });
+        // Ciphertext should be padded plaintext + 16-byte GCM tag
+        final ctBytes = base64Decode(encrypted.ciphertext);
+        expect(ctBytes.length, equals(padded.length + 16));
+      },
+    );
 
     test('message numbers increment correctly with each encrypt', () async {
       final sharedSecret = List<int>.filled(32, 0x55);
@@ -464,45 +512,47 @@ void main() {
       }
     });
 
-    test('sender and receiver ratchets produce matching encrypt/decrypt cycle',
-        () async {
-      final sharedSecret = List<int>.filled(32, 0x77);
+    test(
+      'sender and receiver ratchets produce matching encrypt/decrypt cycle',
+      () async {
+        final sharedSecret = List<int>.filled(32, 0x77);
 
-      // Bob's signed pre-key acts as the initial DH key
-      final bobDHKeyPair = await SignalKeyHelper.generateX25519KeyPair();
+        // Bob's signed pre-key acts as the initial DH key
+        final bobDHKeyPair = await SignalKeyHelper.generateX25519KeyPair();
 
-      // Alice initializes as sender
-      final aliceRatchet = await DoubleRatchet.initSender(
-        sharedSecret: sharedSecret,
-        recipientPublicKey: bobDHKeyPair.publicKey,
-      );
+        // Alice initializes as sender
+        final aliceRatchet = await DoubleRatchet.initSender(
+          sharedSecret: sharedSecret,
+          recipientPublicKey: bobDHKeyPair.publicKey,
+        );
 
-      // Bob initializes as receiver
-      final bobRatchet = await DoubleRatchet.initReceiver(
-        sharedSecret: sharedSecret,
-        dhKeyPair: bobDHKeyPair,
-      );
+        // Bob initializes as receiver
+        final bobRatchet = await DoubleRatchet.initReceiver(
+          sharedSecret: sharedSecret,
+          dhKeyPair: bobDHKeyPair,
+        );
 
-      // Alice encrypts 3 messages
-      final messages = <EncryptedMessage>[];
-      for (var i = 0; i < 3; i++) {
-        final padded = MessagePadding.pad(utf8.encode('Alice msg $i'));
-        messages.add(await aliceRatchet.encrypt(padded));
-      }
+        // Alice encrypts 3 messages
+        final messages = <EncryptedMessage>[];
+        for (var i = 0; i < 3; i++) {
+          final padded = MessagePadding.pad(utf8.encode('Alice msg $i'));
+          messages.add(await aliceRatchet.encrypt(padded));
+        }
 
-      // Bob decrypts all 3
-      for (var i = 0; i < 3; i++) {
-        final decrypted = await bobRatchet.decrypt(messages[i]);
-        final text = MessagePadding.unpadString(decrypted);
-        expect(text, equals('Alice msg $i'));
-      }
+        // Bob decrypts all 3
+        for (var i = 0; i < 3; i++) {
+          final decrypted = await bobRatchet.decrypt(messages[i]);
+          final text = MessagePadding.unpadString(decrypted);
+          expect(text, equals('Alice msg $i'));
+        }
 
-      // Bob replies to Alice
-      final bobReplyPadded = MessagePadding.pad(utf8.encode('Bob reply'));
-      final bobReply = await bobRatchet.encrypt(bobReplyPadded);
-      final decryptedReply = await aliceRatchet.decrypt(bobReply);
-      expect(MessagePadding.unpadString(decryptedReply), equals('Bob reply'));
-    });
+        // Bob replies to Alice
+        final bobReplyPadded = MessagePadding.pad(utf8.encode('Bob reply'));
+        final bobReply = await bobRatchet.encrypt(bobReplyPadded);
+        final decryptedReply = await aliceRatchet.decrypt(bobReply);
+        expect(MessagePadding.unpadString(decryptedReply), equals('Bob reply'));
+      },
+    );
 
     test('out-of-order messages decrypt correctly via skipped keys', () async {
       final sharedSecret = List<int>.filled(32, 0x33);
@@ -546,42 +596,49 @@ void main() {
   // ── Ed25519 Sign/Verify Determinism ──────────────────────────────────
 
   group('Ed25519 sign/verify determinism', () {
-    test('signing the same data with the same key produces the same signature',
-        () async {
-      final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final data = utf8.encode('deterministic signing test');
+    test(
+      'signing the same data with the same key produces the same signature',
+      () async {
+        final signingKP = await SignalKeyHelper.generateSigningKeyPair();
+        final data = utf8.encode('deterministic signing test');
 
-      final sig1 = await SignalKeyHelper.sign(signingKP.privateKey, data);
-      final sig2 = await SignalKeyHelper.sign(signingKP.privateKey, data);
+        final sig1 = await SignalKeyHelper.sign(signingKP.privateKey, data);
+        final sig2 = await SignalKeyHelper.sign(signingKP.privateKey, data);
 
-      // Ed25519 is deterministic -- same key + same data = same signature
-      expect(sig1, equals(sig2));
-    });
+        // Ed25519 is deterministic -- same key + same data = same signature
+        expect(sig1, equals(sig2));
+      },
+    );
 
-    test('verification succeeds with correct key and fails with wrong key',
-        () async {
-      final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final otherKP = await SignalKeyHelper.generateSigningKeyPair();
-      final data = utf8.encode('verify me');
+    test(
+      'verification succeeds with correct key and fails with wrong key',
+      () async {
+        final signingKP = await SignalKeyHelper.generateSigningKeyPair();
+        final otherKP = await SignalKeyHelper.generateSigningKeyPair();
+        final data = utf8.encode('verify me');
 
-      final signature = await SignalKeyHelper.sign(signingKP.privateKey, data);
+        final signature = await SignalKeyHelper.sign(
+          signingKP.privateKey,
+          data,
+        );
 
-      // Correct key -- should verify
-      final valid = await SignalKeyHelper.verify(
-        signingKP.publicKey,
-        data,
-        signature,
-      );
-      expect(valid, isTrue);
+        // Correct key -- should verify
+        final valid = await SignalKeyHelper.verify(
+          signingKP.publicKey,
+          data,
+          signature,
+        );
+        expect(valid, isTrue);
 
-      // Wrong key -- should fail
-      final invalid = await SignalKeyHelper.verify(
-        otherKP.publicKey,
-        data,
-        signature,
-      );
-      expect(invalid, isFalse);
-    });
+        // Wrong key -- should fail
+        final invalid = await SignalKeyHelper.verify(
+          otherKP.publicKey,
+          data,
+          signature,
+        );
+        expect(invalid, isFalse);
+      },
+    );
 
     test('modified data fails verification', () async {
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
@@ -708,8 +765,10 @@ void main() {
 
     test('signed pre-key signature is valid', () async {
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(42, signingKP);
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        42,
+        signingKP,
+      );
 
       expect(signedPreKey.keyId, equals(42));
 
@@ -760,7 +819,9 @@ void main() {
       expect(restored.dhPublicKey, equals(original.dhPublicKey));
       expect(restored.messageNumber, equals(original.messageNumber));
       expect(
-          restored.previousChainLength, equals(original.previousChainLength));
+        restored.previousChainLength,
+        equals(original.previousChainLength),
+      );
       expect(restored.ciphertext, equals(original.ciphertext));
       expect(restored.nonce, equals(original.nonce));
     });
@@ -808,15 +869,19 @@ void main() {
       final aliceIdentityKeyPair =
           await SignalKeyHelper.generateIdentityKeyPair();
       final bobSigningKeyPair = await SignalKeyHelper.generateSigningKeyPair();
-      final bobSignedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(1, bobSigningKeyPair);
+      final bobSignedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        1,
+        bobSigningKeyPair,
+      );
 
       // Create a malformed identity key (16 bytes instead of 32)
-      final invalidIdentityKey =
-          base64Encode(List<int>.filled(16, 0x42)); // 16 bytes
+      final invalidIdentityKey = base64Encode(
+        List<int>.filled(16, 0x42),
+      ); // 16 bytes
 
       // Create PreKeyBundle with the invalid identity key
       final malformedBundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'bob-user-id',
         deviceId: 'bob-device-id',
         identityKey: invalidIdentityKey, // WRONG LENGTH
@@ -834,7 +899,9 @@ void main() {
           identityKeyPair: aliceIdentityKeyPair,
           recipientBundle: malformedBundle,
         ),
-        throwsA(anything), // Expect any exception (StateError, FormatException, etc.)
+        throwsA(
+          anything,
+        ), // Expect any exception (StateError, FormatException, etc.)
       );
     });
 
@@ -866,8 +933,7 @@ void main() {
       );
     });
 
-    test('SealedSenderEnvelope.unseal rejects truncated ciphertext',
-        () async {
+    test('SealedSenderEnvelope.unseal rejects truncated ciphertext', () async {
       // Generate a valid identity key pair for the recipient
       final recipientIdentityKeyPair =
           await SignalKeyHelper.generateIdentityKeyPair();
@@ -875,7 +941,12 @@ void main() {
       // Create a malformed sealed envelope with too-short ciphertext
       final malformedEnvelope = {
         'ephemeralPublicKey': base64Encode(List<int>.filled(32, 0x05)),
-        'ciphertext': base64Encode([0x00, 0x01, 0x02, 0x03]), // 4 bytes (TOO SHORT)
+        'ciphertext': base64Encode([
+          0x00,
+          0x01,
+          0x02,
+          0x03,
+        ]), // 4 bytes (TOO SHORT)
         'nonce': base64Encode(List<int>.filled(12, 0x06)),
       };
 

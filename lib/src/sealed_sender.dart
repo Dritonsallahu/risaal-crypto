@@ -7,6 +7,8 @@ import 'secure_memory.dart';
 import 'crypto_debug_logger.dart';
 import 'key_helper.dart';
 import 'models/signal_keys.dart';
+import 'sealed_sender_errors.dart';
+import 'sender_certificate.dart';
 
 /// Content extracted from an unsealed Sealed Sender envelope.
 ///
@@ -58,6 +60,22 @@ class SealedSenderContent {
   /// `null` if the sender did not include a server token (backwards-compatible).
   final String? serverToken;
 
+  /// `true` only when the envelope carried a Sender Certificate v1 that
+  /// passed every check against a pinned server signing key (R4-C3).
+  final bool certified;
+
+  /// `keyId` of the verified certificate; `null` unless [certified].
+  final String? certificateKeyId;
+
+  /// `true` when the envelope carried a certificate but no server signing
+  /// key was pinned, so it was NOT evaluated (accept-both rollout rule).
+  final bool certificateIgnored;
+
+  /// The sender's Ed25519 signing public key (base64) from the verified
+  /// certificate; `null` unless [certified]. Only SERVER-attested (contract
+  /// v2 has no sender binding), so it must never seed a signing-key pin.
+  final String? senderSigningKey;
+
   const SealedSenderContent({
     required this.senderId,
     required this.senderDeviceId,
@@ -65,6 +83,10 @@ class SealedSenderContent {
     required this.encryptedMessage,
     required this.timestamp,
     this.serverToken,
+    this.certified = false,
+    this.certificateKeyId,
+    this.certificateIgnored = false,
+    this.senderSigningKey,
   });
 }
 
@@ -103,9 +125,28 @@ class SealedSenderContent {
 ///   "senderDeviceId":    "device-uuid",
 ///   "senderIdentityKey": "<base64 X25519 public key>",
 ///   "timestamp":         1678901234567,
-///   "message":           { <Double Ratchet envelope> }
+///   "message":           { <Double Ratchet envelope> },
+///   "senderCertificate": "<base64 server-issued certificate bytes>",  // optional
+///   "serverSignature":   "<base64 Ed25519 server signature>"          // optional
 /// }
 /// ```
+///
+/// Sender Certificate v1 (R4-C3; contract
+/// `docs/readiness/REMEDIATION_2026-10/contracts/R4-C3-sender-certificate-v1.md`):
+///   - Contract v2: the two certificate fields are all-or-nothing; one alone,
+///     or the removed v1 `senderSignature` field (the non-deniable
+///     per-recipient sender binding), is rejected as `malformed` whether or
+///     not a server key is pinned.
+///   - When [unseal] receives non-empty `trustedServerSigningKeys`, the
+///     certificate is verified in this order, fail-closed and before the nonce
+///     is recorded: malformed → unknownKeyId → badServerSignature →
+///     identityMismatch (vs. the sealed senderId/deviceId/identityKey) →
+///     notYetValid/expired (vs. the SEALED timestamp ± 5 min).
+///     Any failure throws [SealedSenderCertificateError]. The sender's
+///     possession of the identity key is proven by the (deniable) inner
+///     message, not by a signature over the certificate.
+///   - Without pinned keys the certificate is not evaluated and the result
+///     reports `certified == false`, `certificateIgnored == true`.
 ///
 /// Replay protection:
 ///   - Messages with timestamps outside a configurable window are rejected
@@ -167,6 +208,13 @@ class SealedSenderEnvelope {
   ///   - [recipientIdentityPublicKey]: Recipient's X25519 identity public key (base64)
   ///   - [serverToken]: Optional opaque server-issued token for abuse resistance.
   ///     If provided, included in the sealed content so the recipient can validate it.
+  ///   - [senderCertificate]: optional. The certificate must name exactly this
+  ///     sender, device and identity key and be usable now. Adds the
+  ///     certificate and its server signature to the sealed payload (contract
+  ///     v2: no sender signature, so the envelope stays deniable).
+  ///
+  /// Throws [ArgumentError] (certificate names another sender) or
+  /// [StateError] (malformed or expired certificate) before any output.
   ///
   /// Returns a JSON map ready for wire transmission.
   static Future<Map<String, dynamic>> seal({
@@ -176,16 +224,34 @@ class SealedSenderEnvelope {
     required Map<String, dynamic> encryptedMessage,
     required String recipientIdentityPublicKey,
     String? serverToken,
+    IssuedSenderCertificate? senderCertificate,
   }) async {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final certificateFields = _certificateFieldsForSeal(
+      senderCertificate: senderCertificate,
+      senderId: senderId,
+      senderDeviceId: senderDeviceId,
+      senderIdentityKey: senderIdentityKey,
+      nowMs: timestamp,
+    );
+
     CryptoDebugLogger.log(
-        'SS_SEAL', 'Sealing: sender=$senderId device=$senderDeviceId');
+      'SS_SEAL',
+      'Sealing: sender=$senderId device=$senderDeviceId',
+    );
     CryptoDebugLogger.logKeyInfo(
-        'SS_SEAL', 'Recipient identity key', recipientIdentityPublicKey);
+      'SS_SEAL',
+      'Recipient identity key',
+      recipientIdentityPublicKey,
+    );
 
     // 1. Generate an ephemeral X25519 key pair for this seal operation
     final ephemeralKP = await SignalKeyHelper.generateX25519KeyPair();
     CryptoDebugLogger.logKeyInfo(
-        'SS_SEAL', 'Ephemeral key', ephemeralKP.publicKey);
+      'SS_SEAL',
+      'Ephemeral key',
+      ephemeralKP.publicKey,
+    );
 
     // 2. Derive a shared secret: DH(ephemeral, recipientIdentityPub)
     final sharedSecret = await _deriveSharedKey(
@@ -193,18 +259,23 @@ class SealedSenderEnvelope {
       recipientIdentityPublicKey,
     );
     CryptoDebugLogger.log(
-        'SS_SEAL', 'Shared secret derived: ${sharedSecret.length} bytes');
+      'SS_SEAL',
+      'Shared secret derived: ${sharedSecret.length} bytes',
+    );
 
     // 3. Build the sender certificate + message payload
     final certPayload = <String, dynamic>{
       'senderId': senderId,
       'senderDeviceId': senderDeviceId,
       'senderIdentityKey': senderIdentityKey,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'timestamp': timestamp,
       'message': encryptedMessage,
     };
     if (serverToken != null) {
       certPayload['serverToken'] = serverToken;
+    }
+    if (certificateFields != null) {
+      certPayload.addAll(certificateFields);
     }
     final sealedContent = jsonEncode(certPayload);
 
@@ -239,6 +310,7 @@ class SealedSenderEnvelope {
   ///   6. Verify timestamp (reject if outside replay window)
   ///   7. Verify sender identity key against known keys (if provided)
   ///   8. Validate server token (if callback provided)
+  ///   8b. Verify the Sender Certificate v1 (if present and keys are pinned)
   ///   9. Extract sender identity (user ID, device ID, identity key) and inner message
   ///
   /// The inner message is still encrypted with the Double Ratchet and must be
@@ -263,8 +335,13 @@ class SealedSenderEnvelope {
   ///     The envelope nonce is checked against this set before processing.
   ///     If already present, the message is rejected as a replay.
   ///     The nonce is added to the set after successful processing.
+  ///   - [trustedServerSigningKeys]: pinned server signing keys (keyId →
+  ///     base64 Ed25519 public key). When non-empty, a carried certificate is
+  ///     verified fail-closed; when null/empty it is ignored (rollout rule).
   ///
   /// Throws:
+  ///   - [SealedSenderCertificateError] if a carried certificate is partial,
+  ///     malformed or fails verification (nonce NOT recorded)
   ///   - [StateError] if nonce was already seen (replay attack)
   ///   - [StateError] if timestamp is outside allowed window (replay attack)
   ///   - [StateError] if sender identity key does not match known key (MitM)
@@ -278,21 +355,26 @@ class SealedSenderEnvelope {
     int maxReplayWindowMs =
         5 * 60 * 1000 + 30 * 1000, // 5min + 30s drift tolerance
     required Set<String> seenNonces,
+    Map<String, String>? trustedServerSigningKeys,
   }) async {
     CryptoDebugLogger.log('SS_UNSEAL', 'Unsealing envelope...');
     final ephemeralPublicKey = sealedEnvelope['ephemeralPublicKey'] as String;
     final ciphertextB64 = sealedEnvelope['ciphertext'] as String;
     final nonceB64 = sealedEnvelope['nonce'] as String;
     CryptoDebugLogger.logKeyInfo(
-        'SS_UNSEAL', 'Ephemeral key from envelope', ephemeralPublicKey);
+      'SS_UNSEAL',
+      'Ephemeral key from envelope',
+      ephemeralPublicKey,
+    );
     CryptoDebugLogger.logKeyInfo(
-        'SS_UNSEAL', 'Our identity key', recipientIdentityKeyPair.publicKey);
+      'SS_UNSEAL',
+      'Our identity key',
+      recipientIdentityKeyPair.publicKey,
+    );
 
     // 1. Nonce replay check — reject before any expensive crypto
     if (seenNonces.contains(nonceB64)) {
-      throw StateError(
-        'Sealed sender nonce already seen — rejecting replay',
-      );
+      throw StateError('Sealed sender nonce already seen — rejecting replay');
     }
 
     // 2. Derive the shared secret: DH(recipientIdentityPriv, ephemeralPub)
@@ -301,13 +383,17 @@ class SealedSenderEnvelope {
       ephemeralPublicKey,
     );
     CryptoDebugLogger.log(
-        'SS_UNSEAL', 'Shared secret derived: ${sharedSecret.length} bytes');
+      'SS_UNSEAL',
+      'Shared secret derived: ${sharedSecret.length} bytes',
+    );
 
     // 3. Decrypt the AES-256-GCM ciphertext
     final combined = base64Decode(ciphertextB64);
     final nonce = base64Decode(nonceB64);
-    CryptoDebugLogger.log('SS_UNSEAL',
-        'Ciphertext: ${combined.length} bytes, nonce: ${nonce.length} bytes');
+    CryptoDebugLogger.log(
+      'SS_UNSEAL',
+      'Ciphertext: ${combined.length} bytes, nonce: ${nonce.length} bytes',
+    );
 
     // Last 16 bytes are the GCM MAC tag
     final ciphertext = combined.sublist(0, combined.length - 16);
@@ -319,8 +405,10 @@ class SealedSenderEnvelope {
     final plainBytes = await _aesGcm.decrypt(secretBox, secretKey: secretKey);
     final payload = jsonDecode(utf8.decode(plainBytes)) as Map<String, dynamic>;
 
-    CryptoDebugLogger.log('SS_UNSEAL',
-        'Unsealed payload: senderId=${payload['senderId']} deviceId=${payload['senderDeviceId']} innerType=${(payload['message'] as Map?)?['type']}');
+    CryptoDebugLogger.log(
+      'SS_UNSEAL',
+      'Unsealed payload: senderId=${payload['senderId']} deviceId=${payload['senderDeviceId']} innerType=${(payload['message'] as Map?)?['type']}',
+    );
 
     // 4. Replay protection — reject messages outside the configurable window
     final timestamp = payload['timestamp'] as int;
@@ -382,7 +470,51 @@ class SealedSenderEnvelope {
       );
     }
 
-    // 7. Record the nonce as seen (after all validations pass)
+    // 6b. Sender Certificate (R4-C3, contract v2) — fail closed BEFORE the
+    // nonce is recorded. Exactly two fields, all-or-nothing; the removed v1
+    // `senderSignature` (non-deniable sender binding) is malformed. Both rules
+    // apply even without pinned keys.
+    if (payload.containsKey('senderSignature')) {
+      throw SealedSenderCertificateError(SenderCertificateFailure.malformed);
+    }
+    final certificateB64 = payload['senderCertificate'];
+    final serverSignature = payload['serverSignature'];
+    final presentCount = [
+      certificateB64,
+      serverSignature,
+    ].where((field) => field != null).length;
+    SenderCertificate? verifiedCertificate;
+    var certificateIgnored = false;
+    if (presentCount != 0) {
+      if (presentCount != 2 ||
+          certificateB64 is! String ||
+          serverSignature is! String) {
+        throw SealedSenderCertificateError(SenderCertificateFailure.malformed);
+      }
+      if (trustedServerSigningKeys == null ||
+          trustedServerSigningKeys.isEmpty) {
+        certificateIgnored = true;
+      } else {
+        verifiedCertificate = await SenderCertificateVerifier.verifyForEnvelope(
+          issued: IssuedSenderCertificate.fromIssuedJson({
+            'certificate': certificateB64,
+            'serverSignature': serverSignature,
+          }),
+          trustedServerSigningKeys: trustedServerSigningKeys,
+          senderId: claimedSenderId,
+          senderDeviceId: payload['senderDeviceId'] as String,
+          senderIdentityKey: claimedIdentityKey,
+          sealedTimestamp: timestamp,
+        );
+      }
+    }
+
+    // 7. Record the nonce as seen (after all outer-layer validations pass).
+    // NOTE: the caller (SignalProtocolManager.decryptSealedSender) ROLLS THIS
+    // BACK (removes the nonce) if the INNER decrypt then fails — so a transient
+    // inner-decrypt failure does not permanently block this envelope from a
+    // later retry. The persistent seen-nonce store is only written on full
+    // success, so a rolled-back nonce never reaches disk.
     seenNonces.add(nonceB64);
 
     // 8. Extract the sender certificate and message
@@ -393,10 +525,39 @@ class SealedSenderEnvelope {
       timestamp: timestamp,
       encryptedMessage: payload['message'] as Map<String, dynamic>,
       serverToken: serverTokenValue,
+      certified: verifiedCertificate != null,
+      certificateKeyId: verifiedCertificate?.keyId,
+      certificateIgnored: certificateIgnored,
+      senderSigningKey: verifiedCertificate?.senderSigningKey,
     );
   }
 
   // ── Private Helpers ──────────────────────────────────────────────
+
+  /// Validates the sender-side certificate and returns the two sealed
+  /// payload fields (contract v2), or `null` when no certificate is used.
+  static Map<String, String>? _certificateFieldsForSeal({
+    required IssuedSenderCertificate? senderCertificate,
+    required String senderId,
+    required String senderDeviceId,
+    required String senderIdentityKey,
+    required int nowMs,
+  }) {
+    if (senderCertificate == null) return null;
+    final cert = SenderCertificate.parse(senderCertificate.certificateBytes);
+    if (cert.senderId != senderId ||
+        cert.senderDeviceId != senderDeviceId ||
+        cert.senderIdentityKey != senderIdentityKey) {
+      throw ArgumentError('senderCertificate does not match the sender');
+    }
+    if (!cert.usableAt(nowMs)) {
+      throw StateError('senderCertificate is expired or not yet valid');
+    }
+    return {
+      'senderCertificate': senderCertificate.certificateBase64,
+      'serverSignature': senderCertificate.serverSignature,
+    };
+  }
 
   /// Perform X25519 DH + HKDF to derive a 32-byte symmetric key.
   static Future<List<int>> _deriveSharedKey(
@@ -418,18 +579,24 @@ class SealedSenderEnvelope {
       keyPair: kp,
       remotePublicKey: remotePub,
     );
-    final rawBytes = await rawSecret.extractBytes();
+    final rawBytes = SecureMemory.ownedCopy(await rawSecret.extractBytes());
+    rawSecret.destroy();
+    SignalKeyHelper.requireContributoryX25519(rawBytes);
 
     // HKDF to derive the final symmetric key
+    final ikm = List<int>.from(rawBytes);
     final derived = await _hkdf.deriveKey(
-      secretKey: SecretKey(List<int>.from(rawBytes)),
+      secretKey: SecretKey(ikm),
       info: _info.codeUnits,
       nonce: Uint8List(32), // 32-byte zero salt
     );
-    final result = await derived.extractBytes();
+    final result = SecureMemory.ownedCopy(await derived.extractBytes());
+    derived.destroy();
 
-    // Zero raw DH secret — no longer needed after HKDF derivation
-    SecureMemory.zeroBytes(rawBytes);
+    // Zero the package-owned raw DH secret and HKDF input (best-effort).
+    final wiped =
+        SecureMemory.zeroBytes(rawBytes) & SecureMemory.zeroBytes(ikm);
+    assert(wiped, 'sealed-sender DH output must be package-owned and zeroable');
 
     return result;
   }

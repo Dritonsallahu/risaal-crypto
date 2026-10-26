@@ -8,16 +8,18 @@ void main() {
   // ── X25519 Key Pair Generation ──────────────────────────────────────
 
   group('SignalKeyHelper.generateX25519KeyPair', () {
-    test('produces a valid key pair with base64-encoded 32-byte keys',
-        () async {
-      final kp = await SignalKeyHelper.generateX25519KeyPair();
+    test(
+      'produces a valid key pair with base64-encoded 32-byte keys',
+      () async {
+        final kp = await SignalKeyHelper.generateX25519KeyPair();
 
-      final pubBytes = base64Decode(kp.publicKey);
-      final privBytes = base64Decode(kp.privateKey);
+        final pubBytes = base64Decode(kp.publicKey);
+        final privBytes = base64Decode(kp.privateKey);
 
-      expect(pubBytes.length, 32);
-      expect(privBytes.length, 32);
-    });
+        expect(pubBytes.length, 32);
+        expect(privBytes.length, 32);
+      },
+    );
 
     test('produces unique key pairs on successive calls', () async {
       final kp1 = await SignalKeyHelper.generateX25519KeyPair();
@@ -152,6 +154,30 @@ void main() {
       final publicKeys = keys.map((k) => k.keyPair.publicKey).toSet();
       expect(publicKeys.length, 10);
     });
+
+    test('background batch validates every generated X25519 pair', () async {
+      final keys = await SignalKeyHelper.generateOneTimePreKeys(20, 8);
+
+      expect(
+        await SignalKeyHelper.areValidX25519KeyPairs(
+          keys.map((key) => key.keyPair),
+        ),
+        isTrue,
+      );
+    });
+
+    test('background batch rejects one mismatched X25519 pair', () async {
+      final keys = await SignalKeyHelper.generateOneTimePreKeys(30, 3);
+      final corrupted = <KeyPair>[
+        keys[0].keyPair,
+        KeyPair(
+          publicKey: keys[1].keyPair.publicKey,
+          privateKey: keys[2].keyPair.privateKey,
+        ),
+      ];
+
+      expect(await SignalKeyHelper.areValidX25519KeyPairs(corrupted), isFalse);
+    });
   });
 
   // ── Kyber (ML-KEM-768) Key Pair ────────────────────────────────────
@@ -184,10 +210,13 @@ void main() {
     test('encapsulate then decapsulate produces the same shared secret', () {
       final kp = SignalKeyHelper.generateKyberKeyPair();
 
-      final (ciphertext, sharedSecretEnc) =
-          SignalKeyHelper.kyberEncapsulate(kp.publicKey);
-      final sharedSecretDec =
-          SignalKeyHelper.kyberDecapsulate(kp.privateKey, ciphertext);
+      final (ciphertext, sharedSecretEnc) = SignalKeyHelper.kyberEncapsulate(
+        kp.publicKey,
+      );
+      final sharedSecretDec = SignalKeyHelper.kyberDecapsulate(
+        kp.privateKey,
+        ciphertext,
+      );
 
       expect(sharedSecretEnc, equals(sharedSecretDec));
     });
@@ -213,20 +242,24 @@ void main() {
       // unless the randomness is identical, which is astronomically unlikely.
     });
 
-    test('decapsulate with wrong private key produces different shared secret',
-        () {
-      final kp1 = SignalKeyHelper.generateKyberKeyPair();
-      final kp2 = SignalKeyHelper.generateKyberKeyPair();
+    test(
+      'decapsulate with wrong private key produces different shared secret',
+      () {
+        final kp1 = SignalKeyHelper.generateKyberKeyPair();
+        final kp2 = SignalKeyHelper.generateKyberKeyPair();
 
-      final (ciphertext, sharedSecretCorrect) =
-          SignalKeyHelper.kyberEncapsulate(kp1.publicKey);
+        final (ciphertext, sharedSecretCorrect) =
+            SignalKeyHelper.kyberEncapsulate(kp1.publicKey);
 
-      // Decapsulate with the wrong private key — should NOT match
-      final sharedSecretWrong =
-          SignalKeyHelper.kyberDecapsulate(kp2.privateKey, ciphertext);
+        // Decapsulate with the wrong private key — should NOT match
+        final sharedSecretWrong = SignalKeyHelper.kyberDecapsulate(
+          kp2.privateKey,
+          ciphertext,
+        );
 
-      expect(sharedSecretWrong, isNot(equals(sharedSecretCorrect)));
-    });
+        expect(sharedSecretWrong, isNot(equals(sharedSecretCorrect)));
+      },
+    );
   });
 
   // ── KeyPair model serialisation ────────────────────────────────────

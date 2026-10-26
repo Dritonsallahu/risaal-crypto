@@ -1,3 +1,5 @@
+import '../crypto_protocol.dart';
+
 /// Post-quantum key agreement policy for PQXDH (hybrid X3DH + Kyber).
 ///
 /// Controls how the protocol handles the Kyber-768 (ML-KEM) post-quantum
@@ -62,14 +64,14 @@ class KeyPair {
   const KeyPair({required this.publicKey, required this.privateKey});
 
   Map<String, dynamic> toJson() => {
-        'publicKey': publicKey,
-        'privateKey': privateKey,
-      };
+    'publicKey': publicKey,
+    'privateKey': privateKey,
+  };
 
   factory KeyPair.fromJson(Map<String, dynamic> json) => KeyPair(
-        publicKey: json['publicKey'] as String,
-        privateKey: json['privateKey'] as String,
-      );
+    publicKey: json['publicKey'] as String,
+    privateKey: json['privateKey'] as String,
+  );
 
   /// Returns a truncated representation for safe debug logging.
   ///
@@ -116,18 +118,18 @@ class SignedPreKey {
   });
 
   Map<String, dynamic> toJson() => {
-        'keyId': keyId,
-        'keyPair': keyPair.toJson(),
-        'signature': signature,
-        'createdAt': createdAt.toIso8601String(),
-      };
+    'keyId': keyId,
+    'keyPair': keyPair.toJson(),
+    'signature': signature,
+    'createdAt': createdAt.toIso8601String(),
+  };
 
   factory SignedPreKey.fromJson(Map<String, dynamic> json) => SignedPreKey(
-        keyId: json['keyId'] as int,
-        keyPair: KeyPair.fromJson(json['keyPair'] as Map<String, dynamic>),
-        signature: json['signature'] as String,
-        createdAt: DateTime.parse(json['createdAt'] as String),
-      );
+    keyId: json['keyId'] as int,
+    keyPair: KeyPair.fromJson(json['keyPair'] as Map<String, dynamic>),
+    signature: json['signature'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+  );
 }
 
 /// Ephemeral one-time pre-key (consumed on first use).
@@ -159,14 +161,14 @@ class OneTimePreKey {
   const OneTimePreKey({required this.keyId, required this.keyPair});
 
   Map<String, dynamic> toJson() => {
-        'keyId': keyId,
-        'keyPair': keyPair.toJson(),
-      };
+    'keyId': keyId,
+    'keyPair': keyPair.toJson(),
+  };
 
   factory OneTimePreKey.fromJson(Map<String, dynamic> json) => OneTimePreKey(
-        keyId: json['keyId'] as int,
-        keyPair: KeyPair.fromJson(json['keyPair'] as Map<String, dynamic>),
-      );
+    keyId: json['keyId'] as int,
+    keyPair: KeyPair.fromJson(json['keyPair'] as Map<String, dynamic>),
+  );
 }
 
 /// Kyber (ML-KEM-768) key pair for post-quantum key encapsulation.
@@ -195,17 +197,60 @@ class KyberKeyPair {
   /// Base64-encoded ML-KEM-768 private key (2400 bytes raw).
   final String privateKey;
 
-  const KyberKeyPair({required this.publicKey, required this.privateKey});
+  /// Unique per device and rotation. Legacy records do not contain this field.
+  final int? keyId;
+
+  /// Protocol metadata is nullable only so stored v0.1 material can be
+  /// identified as legacy and rotated. It is never inferred from byte length.
+  final int? cryptoProtocolEpoch;
+  final String? kemSuite;
+  final String? kemStandard;
+  final int? kemWireVersion;
+
+  const KyberKeyPair({
+    required this.publicKey,
+    required this.privateKey,
+    this.keyId,
+    this.cryptoProtocolEpoch,
+    this.kemSuite,
+    this.kemStandard,
+    this.kemWireVersion,
+  });
+
+  bool get isCurrentProtocol =>
+      keyId != null &&
+      keyId! > 0 &&
+      keyId! <= RisaalCryptoProtocol.maxKeyId &&
+      cryptoProtocolEpoch != null &&
+      kemSuite != null &&
+      kemStandard != null &&
+      kemWireVersion != null &&
+      RisaalCryptoProtocol.isCurrentKemMetadata(
+        cryptoProtocolEpoch: cryptoProtocolEpoch!,
+        kemSuite: kemSuite!,
+        kemStandard: kemStandard!,
+        kemWireVersion: kemWireVersion!,
+      );
 
   Map<String, dynamic> toJson() => {
-        'publicKey': publicKey,
-        'privateKey': privateKey,
-      };
+    'publicKey': publicKey,
+    'privateKey': privateKey,
+    if (keyId != null) 'keyId': keyId,
+    if (cryptoProtocolEpoch != null) 'cryptoProtocolEpoch': cryptoProtocolEpoch,
+    if (kemSuite != null) 'kemSuite': kemSuite,
+    if (kemStandard != null) 'kemStandard': kemStandard,
+    if (kemWireVersion != null) 'kemWireVersion': kemWireVersion,
+  };
 
   factory KyberKeyPair.fromJson(Map<String, dynamic> json) => KyberKeyPair(
-        publicKey: json['publicKey'] as String,
-        privateKey: json['privateKey'] as String,
-      );
+    publicKey: json['publicKey'] as String,
+    privateKey: json['privateKey'] as String,
+    keyId: json['keyId'] as int?,
+    cryptoProtocolEpoch: json['cryptoProtocolEpoch'] as int?,
+    kemSuite: json['kemSuite'] as String?,
+    kemStandard: json['kemStandard'] as String?,
+    kemWireVersion: json['kemWireVersion'] as int?,
+  );
 }
 
 /// Public portion of a Kyber pre-key (no private key material).
@@ -225,18 +270,62 @@ class KyberPreKeyPublic {
   /// Base64-encoded ML-KEM-768 public key.
   final String publicKey;
 
-  const KyberPreKeyPublic({required this.keyId, required this.publicKey});
+  final int cryptoProtocolEpoch;
+  final String kemSuite;
+  final String kemStandard;
+  final int kemWireVersion;
+
+  /// Base64-encoded Ed25519 signature over the canonical epoch-2 transcript.
+  final String signature;
+
+  const KyberPreKeyPublic({
+    required this.keyId,
+    required this.publicKey,
+    required this.cryptoProtocolEpoch,
+    required this.kemSuite,
+    required this.kemStandard,
+    required this.kemWireVersion,
+    required this.signature,
+  });
+
+  bool get isCurrentProtocol =>
+      keyId > 0 &&
+      keyId <= RisaalCryptoProtocol.maxKeyId &&
+      signature.isNotEmpty &&
+      RisaalCryptoProtocol.isCurrentKemMetadata(
+        cryptoProtocolEpoch: cryptoProtocolEpoch,
+        kemSuite: kemSuite,
+        kemStandard: kemStandard,
+        kemWireVersion: kemWireVersion,
+      );
 
   Map<String, dynamic> toJson() => {
-        'keyId': keyId,
-        'publicKey': publicKey,
-      };
+    'keyId': keyId,
+    'publicKey': publicKey,
+    'cryptoProtocolEpoch': cryptoProtocolEpoch,
+    'kemSuite': kemSuite,
+    'kemStandard': kemStandard,
+    'kemWireVersion': kemWireVersion,
+    'signature': signature,
+  };
 
-  factory KyberPreKeyPublic.fromJson(Map<String, dynamic> json) =>
-      KyberPreKeyPublic(
-        keyId: json['keyId'] as int,
-        publicKey: json['publicKey'] as String,
+  factory KyberPreKeyPublic.fromJson(Map<String, dynamic> json) {
+    final key = KyberPreKeyPublic(
+      keyId: json['keyId'] as int,
+      publicKey: json['publicKey'] as String,
+      cryptoProtocolEpoch: json['cryptoProtocolEpoch'] as int? ?? -1,
+      kemSuite: json['kemSuite'] as String? ?? '',
+      kemStandard: json['kemStandard'] as String? ?? '',
+      kemWireVersion: json['kemWireVersion'] as int? ?? -1,
+      signature: json['signature'] as String? ?? '',
+    );
+    if (!key.isCurrentProtocol) {
+      throw const FormatException(
+        'Unsupported, legacy, or unsigned ML-KEM pre-key',
       );
+    }
+    return key;
+  }
 }
 
 /// Server-side bundle of a recipient's public keys (used by initiator).
@@ -260,6 +349,9 @@ class KyberPreKeyPublic {
 ///   - [SignalProtocolManager.createSession] which consumes this bundle
 ///   - [SignalProtocolManager.generateKeyBundle] which produces the upload payload
 class PreKeyBundle {
+  /// Exact immutable server receipt route for this consumer fetch.
+  final OpkGenerationRouting opkRoute;
+
   /// The recipient's user ID.
   final String userId;
 
@@ -291,6 +383,7 @@ class PreKeyBundle {
   final KyberPreKeyPublic? kyberPreKey;
 
   const PreKeyBundle({
+    required this.opkRoute,
     required this.userId,
     required this.deviceId,
     required this.identityKey,
@@ -300,15 +393,42 @@ class PreKeyBundle {
     this.kyberPreKey,
   });
 
+  /// Validate the direct-constructor path and return the exact PQXDH transcript.
+  PreKeyHandshakeRouting requireCurrentRouting() {
+    final kem = kyberPreKey;
+    if (kem == null) {
+      throw const FormatException(
+        'PreKeyBundle requires current ML-KEM material',
+      );
+    }
+    final routing = PreKeyHandshakeRouting(
+      opkRoute: opkRoute,
+      recipientSignedPreKeyId: signedPreKey.keyId,
+      usedOneTimePreKeyId: oneTimePreKey?.keyId,
+      kemMetadata: MlKemEnvelopeMetadata(
+        cryptoProtocolEpoch: kem.cryptoProtocolEpoch,
+        kemSuite: kem.kemSuite,
+        kemStandard: kem.kemStandard,
+        kemWireVersion: kem.kemWireVersion,
+        recipientKeyId: kem.keyId,
+      ),
+    );
+    routing.requireCurrent();
+    return routing;
+  }
+
   Map<String, dynamic> toJson() => {
-        'userId': userId,
-        'deviceId': deviceId,
-        'identityKey': identityKey,
-        'identitySigningKey': identitySigningKey,
-        'signedPreKey': signedPreKey.toJson(),
-        if (oneTimePreKey != null) 'oneTimePreKey': oneTimePreKey!.toJson(),
-        if (kyberPreKey != null) 'kyberPreKey': kyberPreKey!.toJson(),
-      };
+    ...opkRoute.toJson(),
+    'userId': userId,
+    'deviceId': deviceId,
+    'identityKey': identityKey,
+    'identitySigningKey': identitySigningKey,
+    'signedPreKey': signedPreKey.toJson(),
+    'oneTimePreKey': oneTimePreKey == null
+        ? null
+        : <String, dynamic>{...oneTimePreKey!.toJson(), ...opkRoute.toJson()},
+    if (kyberPreKey != null) 'kyberPreKey': kyberPreKey!.toJson(),
+  };
 
   factory PreKeyBundle.fromJson(Map<String, dynamic> json) {
     final signingKey = json['identitySigningKey'];
@@ -319,25 +439,53 @@ class PreKeyBundle {
         'signature verification downgrade attacks.',
       );
     }
-    return PreKeyBundle(
-      userId: json['userId'] as String,
-      deviceId: json['deviceId'] as String,
-      identityKey: json['identityKey'] as String,
-      identitySigningKey: signingKey,
-      signedPreKey: SignedPreKeyPublic.fromJson(
-        json['signedPreKey'] as Map<String, dynamic>,
-      ),
-      oneTimePreKey: json['oneTimePreKey'] != null
-          ? OneTimePreKeyPublic.fromJson(
-              json['oneTimePreKey'] as Map<String, dynamic>,
-            )
-          : null,
-      kyberPreKey: json['kyberPreKey'] != null
-          ? KyberPreKeyPublic.fromJson(
-              json['kyberPreKey'] as Map<String, dynamic>,
-            )
-          : null,
-    );
+    if (!json.containsKey('oneTimePreKey')) {
+      throw const FormatException(
+        'PreKeyBundle requires an explicit oneTimePreKey value',
+      );
+    }
+    try {
+      final route = OpkGenerationRouting.fromJson(json);
+      final rawOneTimePreKey = json['oneTimePreKey'];
+      OneTimePreKeyPublic? oneTimePreKey;
+      if (rawOneTimePreKey != null) {
+        if (rawOneTimePreKey is! Map) {
+          throw const FormatException('Invalid one-time pre-key');
+        }
+        final normalized = Map<String, dynamic>.from(rawOneTimePreKey);
+        if (OpkGenerationRouting.fromJson(normalized) != route) {
+          throw const FormatException(
+            'Nested one-time pre-key routing does not match bundle',
+          );
+        }
+        oneTimePreKey = OneTimePreKeyPublic.fromJson(normalized);
+      }
+      final rawSignedPreKey = json['signedPreKey'];
+      final rawKyberPreKey = json['kyberPreKey'];
+      if (rawSignedPreKey is! Map || rawKyberPreKey is! Map) {
+        throw const FormatException('Incomplete PreKeyBundle key material');
+      }
+      final bundle = PreKeyBundle(
+        opkRoute: route,
+        userId: json['userId'] as String,
+        deviceId: json['deviceId'] as String,
+        identityKey: json['identityKey'] as String,
+        identitySigningKey: signingKey,
+        signedPreKey: SignedPreKeyPublic.fromJson(
+          Map<String, dynamic>.from(rawSignedPreKey),
+        ),
+        oneTimePreKey: oneTimePreKey,
+        kyberPreKey: KyberPreKeyPublic.fromJson(
+          Map<String, dynamic>.from(rawKyberPreKey),
+        ),
+      );
+      bundle.requireCurrentRouting();
+      return bundle;
+    } on FormatException {
+      rethrow;
+    } on Object {
+      throw const FormatException('Invalid PreKeyBundle');
+    }
   }
 
   /// Parse from the server's JSON response format.
@@ -375,10 +523,10 @@ class SignedPreKeyPublic {
   });
 
   Map<String, dynamic> toJson() => {
-        'keyId': keyId,
-        'publicKey': publicKey,
-        'signature': signature,
-      };
+    'keyId': keyId,
+    'publicKey': publicKey,
+    'signature': signature,
+  };
 
   factory SignedPreKeyPublic.fromJson(Map<String, dynamic> json) =>
       SignedPreKeyPublic(
@@ -409,10 +557,7 @@ class OneTimePreKeyPublic {
 
   const OneTimePreKeyPublic({required this.keyId, required this.publicKey});
 
-  Map<String, dynamic> toJson() => {
-        'keyId': keyId,
-        'publicKey': publicKey,
-      };
+  Map<String, dynamic> toJson() => {'keyId': keyId, 'publicKey': publicKey};
 
   factory OneTimePreKeyPublic.fromJson(Map<String, dynamic> json) =>
       OneTimePreKeyPublic(

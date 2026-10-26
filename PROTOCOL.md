@@ -17,19 +17,18 @@
 8. [Sender Keys (Group Messaging)](#8-sender-keys-group-messaging)
 9. [Safety Numbers](#9-safety-numbers)
 10. [Message Padding](#10-message-padding)
-11. [Steganography](#11-steganography)
-12. [Secure Memory Management](#12-secure-memory-management)
-13. [Session Auto-Reset](#13-session-auto-reset)
-14. [Cryptographic Primitives](#14-cryptographic-primitives)
-15. [Threat Model](#15-threat-model)
-16. [Known Limitations and Future Work](#16-known-limitations-and-future-work)
-17. [References](#17-references)
+11. [Secure Memory Management](#11-secure-memory-management)
+12. [Session Auto-Reset (Removed)](#12-session-auto-reset-removed)
+13. [Cryptographic Primitives](#13-cryptographic-primitives)
+14. [Threat Model](#14-threat-model)
+15. [Known Limitations and Future Work](#15-known-limitations-and-future-work)
+16. [References](#16-references)
 
 ---
 
 ## 1. Overview
 
-This document specifies the cryptographic protocol implemented by the `risaal_crypto` package, a military-grade end-to-end encryption library for the Risaal secure messenger. The protocol extends Signal's proven cryptographic primitives with post-quantum resistance (Kyber-768), metadata protection (Sealed Sender), and anti-forensics features.
+This document specifies the cryptographic protocol implemented by the `risaal_crypto` package, an end-to-end encryption library for the Risaal secure messenger. The protocol extends Signal's proven cryptographic primitives with post-quantum resistance (Kyber-768), metadata protection (Sealed Sender), and anti-forensics features.
 
 ### 1.1 Design Goals
 
@@ -79,7 +78,7 @@ Throughout this document, we use the following notation:
 | `HKDF(IKM, info, salt)` | HKDF-SHA256 with 32-byte or 64-byte output |
 | `HMAC(key, data)` | HMAC-SHA256 |
 | `AES-GCM(key, plaintext)` | AES-256-GCM encryption |
-| `AES-CBC(key, plaintext)` | AES-256-CBC encryption with PKCS7 padding |
+| `AES-CBC(key, plaintext)` | AES-256-CBC with PKCS7 padding — legacy v1 Sender Key blobs only; never produced, and rejected by the live API (§8.8) |
 | `Sign(sk, data)` | Ed25519 signature |
 | `Verify(pk, data, sig)` | Ed25519 signature verification |
 | `Encap(pk)` | Kyber-768 encapsulation, returns (ciphertext, shared_secret) |
@@ -206,6 +205,7 @@ interface PreKeyBundle {
 | **KDF** | HKDF-SHA256 with 32-byte output |
 | **Salt** | 32-byte zero buffer (per Signal specification) |
 | **Curves** | X25519 for all DH operations |
+| **DH output check** | Every X25519 output (X3DH, Double Ratchet, Sealed Sender) is rejected if it is all zero (RFC 7748 §6.1): a low-order public key would otherwise force the term to a public constant |
 | **Signing** | Ed25519 for signed pre-key verification |
 
 ### 4.2 Initiator Protocol (Alice)
@@ -335,7 +335,7 @@ Bob computes the same shared secret by mirroring Alice's DH operations:
 
 ## 5. PQXDH: Post-Quantum X3DH
 
-PQXDH extends X3DH with a post-quantum key encapsulation mechanism (Kyber-768) to resist attacks from quantum computers. The protocol runs **in parallel** with classical X3DH and gracefully degrades if Kyber is unavailable.
+PQXDH extends X3DH with a post-quantum key encapsulation mechanism (Kyber-768) to resist attacks from quantum computers. The Kyber shared secret is combined with the classical X3DH terms, so the session stays secure if either component holds. Kyber is mandatory: if it is unavailable, session establishment fails rather than degrading (§5.5).
 
 ### 5.1 Algorithm Selection
 
@@ -358,30 +358,22 @@ PQXDH extends X3DH with a post-quantum key encapsulation mechanism (Kyber-768) t
 
 **Additional Steps** (on top of X3DH):
 
-1. **Check for Kyber Pre-Key**
+1. **Require a signed Kyber Pre-Key**
    ```
-   if bundle.kyberPreKey exists:
-       kyber_available = true
-   else:
-       kyber_available = false  // Degrade to pure X3DH
+   require bundle.kyberPreKey exists
+   require Verify(IK_B.signingKey, kyber_prekey_transcript, kyberPreKey.signature)
+   // Missing or unsigned → abort; there is no classical fallback (§5.5)
    ```
 
 2. **Kyber Encapsulation**
    ```
-   if kyber_available:
-       try:
-           (kyber_ciphertext, kyber_ss) = Encap(KPK_B.publicKey)
-       catch KyberFFIError:
-           kyber_ss = null  // Graceful degradation
-           kyber_ciphertext = null
+   (kyber_ciphertext, kyber_ss) = Encap(KPK_B.publicKey)
+   // Any failure aborts session establishment
    ```
 
 3. **Augment DH Concatenation**
    ```
-   if kyber_ss exists:
-       DH_concat = DH1 || DH2 || DH3 [|| DH4] || kyber_ss
-   else:
-       DH_concat = DH1 || DH2 || DH3 [|| DH4]  // Classical X3DH fallback
+   DH_concat = DH1 || DH2 || DH3 [|| DH4] || kyber_ss
    ```
 
 4. **Derive Hybrid Shared Secret**
@@ -401,38 +393,36 @@ PQXDH extends X3DH with a post-quantum key encapsulation mechanism (Kyber-768) t
    ```
 
 **Additional Output:**
-- Kyber ciphertext: `base64(kyber_ciphertext)` or null (sent to Bob)
+- Kyber ciphertext: `base64(kyber_ciphertext)` (always present; sent to Bob)
 
 ### 5.4 PQXDH Responder (Bob)
 
 **Additional Steps**:
 
-1. **Check for Kyber Ciphertext**
+1. **Require the Kyber Ciphertext**
    ```
-   if kyber_ciphertext exists and KPK_B exists:
-       kyber_available = true
-   else:
-       kyber_available = false
+   require kyber_ciphertext exists and KPK_B exists
+   // A PreKey message without one is rejected before any one-time
+   // pre-key is consumed
    ```
 
 2. **Kyber Decapsulation**
    ```
-   if kyber_available:
-       try:
-           kyber_ss = Decap(KPK_B.privateKey, kyber_ciphertext)
-       catch KyberFFIError:
-           kyber_ss = null  // Must match initiator's behavior
+   kyber_ss = Decap(KPK_B.privateKey, kyber_ciphertext)
+   // Any failure rejects the message
    ```
 
 3. **Derive Hybrid Shared Secret** (identical augmentation to Alice)
 
-### 5.5 Graceful Degradation
+### 5.5 No Classical Fallback
 
-If either party encounters an error in Kyber operations (e.g., missing FFI bindings, corrupted key), the protocol falls back to pure X25519 X3DH. This ensures:
-
-1. **No loss of availability**: Protocol continues even if post-quantum layer fails
-2. **Security baseline**: Classical X3DH still provides security against classical attackers
-3. **Consistent state**: Both parties arrive at the same shared secret by following identical error handling
+Post-quantum protection is mandatory. `PqxdhPolicy.requirePq` is the only policy the
+epoch-2 API accepts; `X3DH.initiateKeyAgreement` throws `UnsupportedError` for any
+other policy. A bundle without a valid, signed Kyber pre-key, or a failed
+encapsulation/decapsulation, aborts session establishment. There is **no** silent
+downgrade to classical X25519 X3DH: an active attacker able to strip the Kyber
+component would otherwise turn a post-quantum session into a classical one without
+either party noticing.
 
 ---
 
@@ -448,7 +438,7 @@ The **Double Ratchet** provides forward secrecy and post-compromise security for
 | **Root KDF** | HKDF-SHA256 with 64-byte output |
 | **Chain KDF** | HMAC-SHA256 |
 | **Encryption** | AES-256-GCM (12-byte nonce, 16-byte tag) |
-| **Max Skipped Keys** | 100 (DoS protection) |
+| **Max Skipped Keys** | 2000 (DoS protection) |
 
 ### 6.2 State Variables
 
@@ -564,10 +554,20 @@ function Encrypt(plaintext):
 
 ### 6.6 Decryption
 
-**Decrypt Ciphertext:**
+**Transactional rule.** Decryption runs on a deep copy of the ratchet state. Every
+step below — skipped-key lookup and removal, the DH ratchet step, skipped-key
+derivation, the receiving chain advance and the anti-replay record — mutates only
+that candidate copy. The candidate replaces the live state **only after AES-GCM
+authentication succeeds**. A message that fails authentication leaves the stored
+session byte-for-byte unchanged, and the session is **never** deleted or reset
+because of an authentication failure. Encrypt and decrypt share one per-session
+lock, so a concurrent send is never lost when a candidate is committed.
+
+**Decrypt Ciphertext** (`state` below is the candidate copy):
 
 ```
 function Decrypt(encrypted_message):
+    state = deep_copy(live_state)
     // Check if message key was skipped and stored
     skip_key = encrypted_message.dhPublicKey + ":" + encrypted_message.messageNumber
     if skip_key in state.skippedKeys:
@@ -590,6 +590,8 @@ function Decrypt(encrypted_message):
 
     plaintext = AES-GCM.decrypt(message_key, encrypted_message.ciphertext, encrypted_message.nonce)
     SecureZero(message_key)
+    // Reached only if the tag verified; a throw above discards `state`.
+    live_state = state
 
     return plaintext
 ```
@@ -643,7 +645,7 @@ function SkipMessageKeys(dh_public_key, until_number):
     state.receivingChainKey = chain_key
 ```
 
-**DoS Protection**: The maximum skipped keys limit (100) prevents an attacker from forcing the victim to store unbounded state by sending messages with arbitrarily large message numbers.
+**DoS Protection**: The maximum skipped keys limit (2000) prevents an attacker from forcing the victim to store unbounded state by sending messages with arbitrarily large message numbers.
 
 ### 6.9 Wire Format
 
@@ -672,7 +674,7 @@ function SkipMessageKeys(dh_public_key, until_number):
 | **Info String** | `"Risaal_SealedSender"` |
 | **KDF** | HKDF-SHA256 with 32-byte output |
 | **Encryption** | AES-256-GCM (12-byte nonce, 16-byte tag) |
-| **Replay Window** | 300,000 ms (5 minutes) |
+| **Replay Window** | 30 days (2,592,000,000 ms); persistent nonce set (capped at 10,000) is the primary guard |
 
 ### 7.2 Seal (Sender Side)
 
@@ -770,7 +772,7 @@ function SkipMessageKeys(dh_public_key, until_number):
    ```
    now = now_milliseconds()
    drift = abs(now - timestamp)
-   if drift > 300_000:  // 5 minutes
+   if drift > 2_592_000_000:  // 30 days; nonce dedup is the primary guard
        throw Error("Sealed sender timestamp outside allowed window")
    ```
 
@@ -843,175 +845,186 @@ The server **cannot determine**:
 
 **Sender Keys** enable efficient group end-to-end encryption. Each group member generates a sender key and distributes it to all other members via existing 1-to-1 encrypted sessions. When sending to the group, the sender encrypts **once** with their sender key, and all members decrypt independently.
 
+> **History.** Versions before the "security(P0): replace AES-256-CBC with
+> AES-256-GCM in Sender Key" change used AES-256-CBC with an HMAC-SHA256 tag keyed
+> by a shared signing secret. Any member holding that secret could forge messages
+> as the sender. The current format (v3) uses AES-256-GCM with the epoch bound into
+> the AAD and an asymmetric Ed25519 signature. Legacy v1 (CBC) and v2 (GCM without
+> epoch) blobs are rejected by the live API.
+
 ### 8.1 Protocol Constants
 
 | Constant | Value |
 |----------|-------|
-| **Encryption** | AES-256-CBC with PKCS7 padding |
-| **Authentication** | HMAC-SHA256 over IV + ciphertext + iteration |
-| **Chain KDF** | HMAC-SHA256 |
-| **Max Chain Advance** | 256 iterations (DoS protection) |
+| **Encryption** | AES-256-GCM, 12-byte random nonce, 16-byte tag |
+| **AAD** | `epoch` (4 bytes, little-endian) |
+| **Authentication** | Ed25519 signature by the sender over `blob ‖ BigEndian32(iteration)` |
+| **Chain KDF** | `next_chain_key = HMAC-SHA256(chain_key, 0x01)`, `message_key = HMAC-SHA256(chain_key, 0x02)` |
+| **Max chain advance per message** | 50 000 iterations |
+| **Retained skipped message keys** | 2000 per sender chain, oldest evicted first, expired after 14 days |
+| **Wire version** | `0x03` |
 
 ### 8.2 Sender Key State
 
-Each group member maintains a sender key state for every other member:
+Each member stores one state per `(groupId, senderId)`:
 
 ```typescript
 interface SenderKeyState {
   groupId: string;
   senderId: string;
-  iteration: number;           // Chain key iteration counter
+  epoch: number;               // Increments on every re-key (e.g. member removal)
+  iteration: number;           // Next expected chain position
   chainKey: Uint8Array;        // 32 bytes, ratchets forward
-  signingKey: Uint8Array;      // 32 bytes, static for HMAC
+  signingPublicKey: string;    // Ed25519 public key (verifies messages)
+  signingPrivateKey?: string;  // Present ONLY in the member's own state
+  skippedMessageKeys: Map<number, Uint8Array>; // out-of-order retention (§8.7)
 }
 ```
 
 ### 8.3 Sender Key Generation
 
-A new group member generates their sender key:
-
 ```
 function GenerateSenderKey(groupId):
+    existing = load_sender_key(groupId, my_user_id)
+    epoch = existing == null ? 0 : existing.epoch + 1
+
     chainKey = random(32)
-    signingKey = random(32)
+    (signingPriv, signingPub) = Ed25519.generate()
 
-    state = {
-        groupId: groupId,
-        senderId: my_user_id,
-        iteration: 0,
-        chainKey: chainKey,
-        signingKey: signingKey
-    }
-
-    store_sender_key(groupId, my_user_id, state)
+    store_sender_key(groupId, my_user_id, {
+        epoch, iteration: 0, chainKey,
+        signingPublicKey: signingPub, signingPrivateKey: signingPriv
+    })
 
     return SenderKeyDistribution {
-        groupId: groupId,
-        senderId: my_user_id,
-        iteration: 0,
+        groupId, senderId: my_user_id, epoch, iteration: 0,
         chainKey: base64(chainKey),
-        signingKey: base64(signingKey)
+        signingKey: signingPub          // public key only
     }
 ```
 
-**Distribution**: The `SenderKeyDistribution` message is encrypted with each member's 1-to-1 Double Ratchet session and sent individually.
+**Distribution**: the `SenderKeyDistribution` is encrypted with each member's 1-to-1 Double Ratchet session and sent individually. The receiver accepts it only when the distribution's `senderId` and `groupId` equal the authenticated 1-to-1 transport sender and the group it was delivered for.
+
+Answering a member's request for a key shares the **current** state (`epoch`, current `iteration`, current chain key); it never re-keys. Re-keying on request would let an unauthenticated request frame force a new epoch at will.
 
 ### 8.4 Sender Key Distribution Processing
 
-When receiving a `SenderKeyDistribution` from another member:
-
 ```
-function ProcessSenderKeyDistribution(groupId, senderId, distribution):
-    state = {
-        groupId: groupId,
-        senderId: senderId,
-        iteration: distribution.iteration,
-        chainKey: base64_decode(distribution.chainKey),
-        signingKey: base64_decode(distribution.signingKey)
-    }
+function ProcessSenderKeyDistribution(groupId, senderId, d):
+    require d.groupId == groupId and d.senderId == senderId
+    require d.iteration >= 0 and d.epoch >= 0
+    require len(base64_decode(d.chainKey)) == 32
+    require len(base64_decode(d.signingKey)) == 32
 
-    store_sender_key(groupId, senderId, state)
+    // Our own chain is the only one holding a private signing key.
+    if senderId == my_user_id:
+        reject("own distribution")
+
+    existing = load_sender_key(groupId, senderId)
+    if existing != null:
+        if d.epoch < existing.epoch:
+            reject("stale epoch")                    // downgrade / replay
+        if d.epoch == existing.epoch:
+            if d.iteration > existing.iteration:
+                reject("roll-forward within an epoch")  // would destroy messages in between
+            if d.signingKey == existing.signingPublicKey:
+                // The same chain again. Never move it backwards: rewinding the
+                // iteration would make consumed messages decrypt a second time.
+                if d.iteration == existing.iteration and d.chainKey != existing.chainKey:
+                    reject("conflicting chain")
+                return                               // idempotent no-op
+            // Different signer at the same epoch = a new chain (e.g. the sender
+            // reinstalled and restarted at epoch 0). Old messages cannot verify
+            // under the new signing key, so replacing opens no replay.
+
+    store_sender_key(groupId, senderId, {
+        epoch: d.epoch, iteration: d.iteration,
+        chainKey: base64_decode(d.chainKey),
+        signingPublicKey: d.signingKey, signingPrivateKey: null
+    })
 ```
 
 ### 8.5 Chain Key Derivation
 
 ```
 function DeriveNextChainKey(chain_key):
-    next_chain_key = HMAC-SHA256(chain_key, 0x01)
-    return next_chain_key
+    return HMAC-SHA256(chain_key, 0x01)
 
 function DeriveMessageKey(chain_key):
-    message_key = HMAC-SHA256(chain_key, 0x02)
-    return message_key
+    return HMAC-SHA256(chain_key, 0x02)
 ```
 
 ### 8.6 Encryption
 
-**Encrypt Group Message:**
-
 ```
 function EncryptGroupMessage(groupId, plaintext):
     state = load_sender_key(groupId, my_user_id)
+    require state.signingPrivateKey != null
 
     message_key = DeriveMessageKey(state.chainKey)
-    iv = random(16)
+    nonce = random(12)
+    aad = LittleEndian32(state.epoch)
+    (ct, tag) = AES-256-GCM.encrypt(message_key, Pad(plaintext), nonce, aad)
+    blob = 0x03 ‖ LittleEndian32(state.epoch) ‖ nonce ‖ ct ‖ tag
 
-    // AES-256-CBC with PKCS7 padding
-    padded = PKCS7Pad(plaintext, 16)
-    ciphertext = AES-CBC(message_key, padded, iv)
+    signature = Ed25519.sign(state.signingPrivateKey,
+                             blob ‖ BigEndian32(state.iteration))
 
-    // HMAC signature for authentication
-    signature_input = iv || ciphertext || BigEndian32(state.iteration)
-    signature = HMAC-SHA256(state.signingKey, signature_input)
-
-    current_iteration = state.iteration
-
-    // Ratchet chain key forward (forward secrecy)
-    old_chain_key = state.chainKey
-    state.chainKey = DeriveNextChainKey(old_chain_key)
+    SecureZero(message_key)
+    old = state.chainKey
+    state.chainKey = DeriveNextChainKey(old)
     state.iteration += 1
-    SecureZero(old_chain_key)
-
+    SecureZero(old)
     store_sender_key(groupId, my_user_id, state)
 
-    return SenderKeyMessage {
-        iteration: current_iteration,
-        ciphertext: base64(ciphertext),
-        iv: base64(iv),
-        signature: base64(signature)
-    }
+    return { iteration, ciphertext: base64(blob), iv: "", signature }
 ```
 
 ### 8.7 Decryption
 
-**Decrypt Group Message:**
+Authentication comes **first**, before any key derivation and before the epoch check, so an unauthenticated frame costs one Ed25519 verification and cannot trigger key re-requests.
 
 ```
-function DecryptGroupMessage(groupId, senderId, sender_key_message):
-    state = load_sender_key(groupId, senderId)
+function DecryptGroupMessage(groupId, senderId, m):
+    require m.blob[0] == 0x03                       // v1/v2 rejected
+    state = load_sender_key(groupId, senderId)       // missing → dependency error
 
-    // Replay protection
-    if sender_key_message.iteration < state.iteration:
-        throw Error("Message iteration is behind stored iteration (replay)")
+    // 1. Authenticate
+    require Ed25519.verify(state.signingPublicKey,
+                           m.blob ‖ BigEndian32(m.iteration), m.signature)
+    // 2. Epoch
+    require LittleEndian32(m.blob[1..5]) == state.epoch
 
-    // Fast-forward chain key to message iteration
-    skip = sender_key_message.iteration - state.iteration
-    if skip > MAX_SKIP_ITERATIONS:
-        throw Error("Too many skipped iterations (DoS protection)")
+    // 3. Locate the message key
+    if m.iteration < state.iteration:
+        // Out-of-order delivery: usable only if its key was retained.
+        message_key = state.skippedMessageKeys[m.iteration]
+        if message_key == null:
+            reject("already read or outside retention window")   // replay
+    else:
+        skip = m.iteration - state.iteration
+        require skip <= 50000
+        chain = state.chainKey
+        for i in [0 .. skip):
+            retain DeriveMessageKey(chain) at state.iteration + i
+                (evict oldest beyond 2000)
+            chain = DeriveNextChainKey(chain)
+        message_key = DeriveMessageKey(chain)
 
-    chain_key = state.chainKey
-    for i in [0 .. skip):
-        old_key = chain_key
-        chain_key = DeriveNextChainKey(old_key)
-        SecureZero(old_key)
+    // 4. Decrypt
+    plaintext = AES-256-GCM.decrypt(message_key, ct, nonce,
+                                    aad = LittleEndian32(state.epoch))
+    SecureZero(message_key)
 
-    // Derive message key at target iteration
-    message_key = DeriveMessageKey(chain_key)
-
-    // Verify HMAC
-    iv = base64_decode(sender_key_message.iv)
-    ciphertext = base64_decode(sender_key_message.ciphertext)
-    signature_input = iv || ciphertext || BigEndian32(sender_key_message.iteration)
-    expected_signature = HMAC-SHA256(state.signingKey, signature_input)
-    actual_signature = base64_decode(sender_key_message.signature)
-
-    if not constant_time_equals(expected_signature, actual_signature):
-        throw Error("HMAC verification failed (tampered message)")
-
-    // Decrypt AES-256-CBC
-    padded = AES-CBC.decrypt(message_key, ciphertext, iv)
-    plaintext = PKCS7Unpad(padded)
-
-    // Advance stored state
-    old_state_chain_key = state.chainKey
-    state.chainKey = DeriveNextChainKey(chain_key)
-    state.iteration = sender_key_message.iteration + 1
-    SecureZero(old_state_chain_key)
-    SecureZero(chain_key)
-
+    // 5. Commit
+    if the key came from skippedMessageKeys:
+        remove and zero it                          // exactly-once
+    else:
+        state.chainKey = DeriveNextChainKey(chain)
+        state.iteration = m.iteration + 1
     store_sender_key(groupId, senderId, state)
 
-    return plaintext
+    return Unpad(plaintext)
 ```
 
 ### 8.8 Wire Format
@@ -1021,22 +1034,26 @@ function DecryptGroupMessage(groupId, senderId, sender_key_message):
 ```json
 {
   "iteration": 42,
-  "ciphertext": "<base64 AES-256-CBC ciphertext>",
-  "iv": "<base64 16-byte IV>",
-  "signature": "<base64 HMAC-SHA256>"
+  "ciphertext": "<base64 blob = 0x03 ‖ epoch(4 LE) ‖ nonce(12) ‖ ct ‖ tag(16)>",
+  "iv": "",
+  "signature": "<base64 Ed25519 signature over blob ‖ BigEndian32(iteration)>"
 }
 ```
+
+`iv` is empty in v3 (the nonce is inside the blob). Blobs whose first byte is not
+`0x03` are rejected before any state is loaded.
 
 ### 8.9 Group Operations
 
 **Add Member:**
-1. All existing members send their current `SenderKeyDistribution` to the new member via 1-to-1 sessions
+1. Existing members send their current `SenderKeyDistribution` to the new member via 1-to-1 sessions
 2. New member generates their own sender key and distributes it to all members
 
 **Remove Member:**
-1. All remaining members generate new sender keys
-2. Distribute new keys to all members except the removed one
-3. Old sender keys are discarded (forward secrecy)
+1. Remaining members re-key: a new chain key and signing key at `epoch + 1`
+2. Distribute the new keys to all members except the removed one
+3. Receivers refuse any later distribution at a lower epoch, and messages are
+   rejected unless their AAD epoch matches the stored epoch
 
 ---
 
@@ -1226,129 +1243,7 @@ function Unpad(padded):
 
 ---
 
-## 11. Steganography
-
-**LSB Steganography** hides encrypted text inside image pixel data by embedding it in the least significant bits (LSBs) of RGB channels. The hidden text is encrypted with AES-256-GCM before embedding, so even if the steganography is detected, the content remains confidential.
-
-### 11.1 Embedding Algorithm
-
-**Inputs:**
-- Image: RGBA pixel data (width × height × 4 bytes)
-- Plaintext: UTF-8 string to hide
-- AES Key: 32-byte shared secret
-
-**Steps:**
-
-1. **Encrypt Plaintext**
-   ```
-   nonce = random(12)
-   (ciphertext, mac) = AES-GCM(aes_key, UTF8(plaintext), nonce)
-   ```
-
-2. **Build Payload**
-   ```
-   payload = nonce (12 bytes) || ciphertext || mac (16 bytes)
-   ```
-
-3. **Prepend Length Header**
-   ```
-   payload_len = len(payload)
-   header = BigEndian32(payload_len)
-   full_data = header || payload
-   ```
-
-4. **Check Capacity**
-   ```
-   max_bytes = (width * height * 3) / 8  // 3 bits per pixel (RGB only)
-   if len(full_data) > max_bytes:
-       throw Error("Message too large for image")
-   ```
-
-5. **Embed Bits into LSBs**
-   ```
-   output_image = copy(image)
-   total_bits = len(full_data) * 8
-
-   for bit_idx in [0 .. total_bits):
-       byte_idx = bit_idx / 8
-       bit_pos = 7 - (bit_idx % 8)  // MSB first
-       bit = (full_data[byte_idx] >> bit_pos) & 1
-
-       // Map bit to RGB channel (3 bits per pixel, skip alpha)
-       pixel_idx = bit_idx / 3
-       channel_offset = bit_idx % 3  // 0=R, 1=G, 2=B
-       rgba_offset = pixel_idx * 4 + channel_offset
-
-       // Clear LSB, then set it
-       output_image[rgba_offset] = (output_image[rgba_offset] & 0xFE) | bit
-
-   return output_image
-   ```
-
-### 11.2 Extraction Algorithm
-
-**Steps:**
-
-1. **Read Length Header from LSBs**
-   ```
-   header_bytes = ReadBitsFromPixels(image, 0, 4)
-   payload_len = BigEndian32(header_bytes)
-   ```
-
-2. **Sanity Check**
-   ```
-   max_bytes = (width * height * 3) / 8 - 4
-   if payload_len <= 0 or payload_len > max_bytes:
-       return null  // No hidden data
-
-   // Minimum: 12 (nonce) + 0 (ciphertext) + 16 (mac) = 28 bytes
-   if payload_len < 28:
-       return null
-   ```
-
-3. **Read Payload**
-   ```
-   payload = ReadBitsFromPixels(image, 4, payload_len)
-   ```
-
-4. **Split Payload**
-   ```
-   nonce = payload[0:12]
-   ciphertext = payload[12:payload_len-16]
-   mac = payload[payload_len-16:payload_len]
-   ```
-
-5. **Decrypt**
-   ```
-   try:
-       plaintext_bytes = AES-GCM.decrypt(aes_key, ciphertext, nonce, mac)
-       plaintext = UTF8.decode(plaintext_bytes)
-       return plaintext
-   catch DecryptionError:
-       return null  // Wrong key or corrupted data
-   ```
-
-### 11.3 Capacity Calculation
-
-**Approximate Capacity:**
-
-```
-capacity_bytes = (width * height * 3) / 8 - 4 - 12 - 16
-               = (width * height * 3) / 8 - 32
-```
-
-**Example:**
-- 1920×1080 image: `(1920 * 1080 * 3) / 8 - 32 = 777,568 bytes` (~759 KB)
-
-### 11.4 Visual Imperceptibility
-
-Modifying only the LSB of each RGB channel results in a maximum color shift of `±1` per channel. This change is imperceptible to the human eye in most images, especially photographs with natural noise.
-
-**Detectability**: LSB steganography is detectable by statistical analysis (chi-square test, RS analysis). However, because the payload is encrypted with AES-256-GCM, even if detected, the content remains confidential.
-
----
-
-## 12. Secure Memory Management
+## 11. Secure Memory Management
 
 Standard Dart garbage collection does **not** guarantee secure erasure of sensitive data. Cryptographic key material may persist in RAM after scope exit due to:
 
@@ -1396,6 +1291,14 @@ SecureMemory.zeroBytes(dhSecret);
 // dhSecret now contains all zeros
 ```
 
+`zeroBytes` overwrites the **caller's own list** in place and returns `true`. It
+returns `false` — it never silently succeeds — when the list cannot be modified
+(for example an unmodifiable view returned by a dependency). Key bytes obtained
+from a dependency are therefore first copied into a package-owned buffer with
+`SecureMemory.ownedCopy`, and that copy is what gets used and wiped. (Versions
+up to 0.3.0 wiped a fresh native allocation instead of the caller's bytes and
+ignored unmodifiable lists.)
+
 **Allocate Native Secure Buffer:**
 
 ```dart
@@ -1425,49 +1328,30 @@ if (buffer != null) {
 
 ---
 
-## 13. Session Auto-Reset
+## 12. Session Auto-Reset (Removed)
 
-Network interruptions, out-of-order messages, or protocol errors can cause Double Ratchet sessions to become desynchronized. The **Session Auto-Reset** mechanism allows clients to recover by re-initializing the session via a fresh X3DH handshake.
+Earlier versions deleted a Double Ratchet session when a message failed
+authentication and rate-limited the resulting resets (3 per window, 24-hour
+cooldown). That design let anyone able to inject a single forged ciphertext — a
+relay, or anyone who can reach the victim's inbox — destroy a working session and
+then block its recovery. **It has been removed**, together with its rate limiter
+and constants.
 
-### 13.1 Error Types
+Current behaviour:
 
-**SessionResetError**
-- Thrown when the local client initiates a session reset
-- Contains: `{message, resetRequested: true}`
-
-**SessionUnstableError**
-- Thrown when the session is in an unstable state (e.g., too many decryption failures)
-- Contains: `{message, instabilityReason: string}`
-
-### 13.2 Reset Protocol
-
-**Initiator (Alice):**
-
-1. Detects decryption failure or protocol error
-2. Throws `SessionResetError`
-3. Client UI shows "Session reset in progress..."
-4. Fetches fresh pre-key bundle from server for Bob
-5. Creates new session via X3DH
-6. Sends a control message: `{type: "session-reset", newSessionId: "..."}`
-
-**Responder (Bob):**
-
-1. Receives `session-reset` control message
-2. Deletes old session state
-3. Creates new session using the received `newSessionId`
-4. Sends acknowledgment: `{type: "session-reset-ack"}`
-
-### 13.3 Rate Limiting
-
-To prevent abuse, session resets are rate-limited:
-
-- **Max resets per session**: 3 per hour
-- **Backoff**: Exponential backoff after each reset (1min, 5min, 15min)
-- **Server enforcement**: Server tracks reset attempts per user-pair and rejects excessive resets
+- A message that fails AEAD authentication throws `MessageAuthenticationError`.
+  The error carries no peer identifiers, ciphertext or plaintext.
+- Because decryption is transactional (§6.6), the stored session is unchanged;
+  the next authentic message decrypts normally.
+- No library code path deletes or resets a session because of an authentication
+  failure. Re-establishing a session is an explicit decision of the host
+  application, never a side effect of receiving bad input.
+- `SessionResetError` and `SessionUnstableError` remain exported for source
+  compatibility only; the library no longer throws them.
 
 ---
 
-## 14. Cryptographic Primitives
+## 13. Cryptographic Primitives
 
 This section summarizes all cryptographic algorithms used in the protocol.
 
@@ -1502,7 +1386,7 @@ This section summarizes all cryptographic algorithms used in the protocol.
 
 ---
 
-## 15. Threat Model
+## 14. Threat Model
 
 ### 15.1 What We Protect Against
 
@@ -1564,7 +1448,7 @@ This section summarizes all cryptographic algorithms used in the protocol.
 
 ---
 
-## 16. Known Limitations and Future Work
+## 15. Known Limitations and Future Work
 
 ### 16.1 Current Limitations
 
@@ -1572,9 +1456,7 @@ This section summarizes all cryptographic algorithms used in the protocol.
 
 2. **No Multi-Device Session Sync**: Each device has independent sessions. Adding a new device requires re-establishing all sessions.
 
-3. **Steganography Detection**: LSB embedding is detectable via statistical analysis (chi-square test). Consider using F5 or JPEG steganography for production.
-
-4. **Session State Size**: Skipped message keys are stored indefinitely (up to 100). Large gaps in message numbers can exhaust memory.
+3. **Session State Size**: Skipped message keys are stored indefinitely (up to 100). Large gaps in message numbers can exhaust memory.
 
 5. **Non-Deniable Group Messaging (by design)**: Sender Keys use Ed25519 digital signatures for strong sender authentication. This is non-deniable — recipients can prove sender identity to third parties. This trade-off provides stronger integrity and non-repudiation guarantees for group contexts where sender verification is critical. 1-to-1 messages remain deniable via symmetric HMAC-based authentication.
 
@@ -1592,13 +1474,11 @@ This section summarizes all cryptographic algorithms used in the protocol.
 
 5. **Padding Randomization**: Add random delays and dummy traffic to further obscure traffic patterns.
 
-6. **Steganography Improvements**: Implement DCT-based JPEG steganography (e.g., F5, outguess) for better undetectability.
-
-7. **Formal Verification**: Mechanically verify the protocol using ProVerif or Tamarin prover.
+6. **Formal Verification**: Mechanically verify the protocol using ProVerif or Tamarin prover.
 
 ---
 
-## 17. References
+## 16. References
 
 ### 17.1 Academic Papers
 

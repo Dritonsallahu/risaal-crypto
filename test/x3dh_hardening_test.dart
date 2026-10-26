@@ -1,34 +1,45 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:risaal_crypto/src/crypto_protocol.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/security_event_bus.dart';
-import 'package:risaal_crypto/src/session_reset_errors.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 import 'package:risaal_crypto/src/x3dh.dart';
 
+import 'helpers/crypto_test_fixtures.dart';
 import 'helpers/fake_secure_storage.dart';
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /// Generate a valid PreKeyBundle with all fields populated.
 Future<
-    ({
-      PreKeyBundle bundle,
-      KeyPair identityKP,
-      KeyPair signingKP,
-      SignedPreKey signedPreKey,
-      OneTimePreKey otpk,
-      KyberKeyPair kyberKP,
-    })> _generateFullBundle() async {
+  ({
+    PreKeyBundle bundle,
+    KeyPair identityKP,
+    KeyPair signingKP,
+    SignedPreKey signedPreKey,
+    OneTimePreKey otpk,
+    KyberKeyPair kyberKP,
+  })
+>
+_generateFullBundle() async {
   final identityKP = await SignalKeyHelper.generateX25519KeyPair();
   final signingKP = await SignalKeyHelper.generateSigningKeyPair();
   final signedPreKey = await SignalKeyHelper.generateSignedPreKey(1, signingKP);
   final otpks = await SignalKeyHelper.generateOneTimePreKeys(1, 1);
   final kyberKP = SignalKeyHelper.generateKyberKeyPair();
+  final kyberSignature = await SignalKeyHelper.sign(
+    signingKP.privateKey,
+    RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+      keyId: kyberKP.keyId!,
+      publicKey: kyberKP.publicKey,
+    ),
+  );
 
   final bundle = PreKeyBundle(
+    opkRoute: testOpkRoute,
     userId: 'bob-123',
     deviceId: 'device-1',
     identityKey: identityKP.publicKey,
@@ -43,8 +54,13 @@ Future<
       publicKey: otpks.first.keyPair.publicKey,
     ),
     kyberPreKey: KyberPreKeyPublic(
-      keyId: 1,
+      keyId: kyberKP.keyId!,
       publicKey: kyberKP.publicKey,
+      cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+      kemSuite: RisaalCryptoProtocol.kemSuite,
+      kemStandard: RisaalCryptoProtocol.kemStandard,
+      kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
+      signature: kyberSignature,
     ),
   );
 
@@ -60,19 +76,22 @@ Future<
 
 /// Generate a valid PreKeyBundle WITHOUT a Kyber pre-key (classical only).
 Future<
-    ({
-      PreKeyBundle bundle,
-      KeyPair identityKP,
-      KeyPair signingKP,
-      SignedPreKey signedPreKey,
-      OneTimePreKey otpk,
-    })> _generateClassicalBundle() async {
+  ({
+    PreKeyBundle bundle,
+    KeyPair identityKP,
+    KeyPair signingKP,
+    SignedPreKey signedPreKey,
+    OneTimePreKey otpk,
+  })
+>
+_generateClassicalBundle() async {
   final identityKP = await SignalKeyHelper.generateX25519KeyPair();
   final signingKP = await SignalKeyHelper.generateSigningKeyPair();
   final signedPreKey = await SignalKeyHelper.generateSignedPreKey(1, signingKP);
   final otpks = await SignalKeyHelper.generateOneTimePreKeys(1, 1);
 
   final bundle = PreKeyBundle(
+    opkRoute: testOpkRoute,
     userId: 'bob-123',
     deviceId: 'device-1',
     identityKey: identityKP.publicKey,
@@ -144,10 +163,7 @@ void main() {
         },
       };
 
-      expect(
-        () => PreKeyBundle.fromJson(json),
-        throwsA(isA<StateError>()),
-      );
+      expect(() => PreKeyBundle.fromJson(json), throwsA(isA<StateError>()));
     });
 
     test('rejects bundle with empty identitySigningKey (fromJson)', () {
@@ -163,24 +179,32 @@ void main() {
         },
       };
 
-      expect(
-        () => PreKeyBundle.fromJson(json),
-        throwsA(isA<StateError>()),
-      );
+      expect(() => PreKeyBundle.fromJson(json), throwsA(isA<StateError>()));
     });
 
     test('rejects bundle with invalid signature', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final identityKP = await SignalKeyHelper.generateX25519KeyPair();
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(1, signingKP);
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        1,
+        signingKP,
+      );
 
       // Use a DIFFERENT signing key in the bundle so the signature
       // (which was signed with the real key) won't verify.
       final wrongSigningKP = await SignalKeyHelper.generateSigningKeyPair();
+      final kyberKP = SignalKeyHelper.generateKyberKeyPair();
+      final kyberSignature = await SignalKeyHelper.sign(
+        wrongSigningKP.privateKey,
+        RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+          keyId: kyberKP.keyId!,
+          publicKey: kyberKP.publicKey,
+        ),
+      );
 
       final bundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'bob-123',
         deviceId: 'device-1',
         identityKey: identityKP.publicKey,
@@ -189,6 +213,15 @@ void main() {
           keyId: signedPreKey.keyId,
           publicKey: signedPreKey.keyPair.publicKey,
           signature: signedPreKey.signature,
+        ),
+        kyberPreKey: KyberPreKeyPublic(
+          keyId: kyberKP.keyId!,
+          publicKey: kyberKP.publicKey,
+          signature: kyberSignature,
+          cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+          kemSuite: RisaalCryptoProtocol.kemSuite,
+          kemStandard: RisaalCryptoProtocol.kemStandard,
+          kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
         ),
       );
 
@@ -230,14 +263,16 @@ void main() {
       expect(json['identitySigningKey'], isNotEmpty);
     });
 
-    test('fromJson -> toJson round-trip preserves identitySigningKey',
-        () async {
-      final data = await _generateFullBundle();
-      final json = data.bundle.toJson();
-      final restored = PreKeyBundle.fromJson(json);
+    test(
+      'fromJson -> toJson round-trip preserves identitySigningKey',
+      () async {
+        final data = await _generateFullBundle();
+        final json = data.bundle.toJson();
+        final restored = PreKeyBundle.fromJson(json);
 
-      expect(restored.identitySigningKey, equals(data.signingKP.publicKey));
-    });
+        expect(restored.identitySigningKey, equals(data.signingKP.publicKey));
+      },
+    );
   });
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -247,7 +282,7 @@ void main() {
   group('PQXDH Anti-Downgrade Policy (Issue #4)', () {
     // ── requirePq ──────────────────────────────────────────────────────
 
-    test('requirePq throws when recipient has no Kyber key', () async {
+    test('requirePq rejects a route without current ML-KEM material', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final classical = await _generateClassicalBundle();
 
@@ -258,10 +293,10 @@ void main() {
           pqxdhPolicy: PqxdhPolicy.requirePq,
         ),
         throwsA(
-          isA<StateError>().having(
+          isA<FormatException>().having(
             (e) => e.message,
             'message',
-            contains('no Kyber pre-key'),
+            contains('current ML-KEM material'),
           ),
         ),
       );
@@ -271,12 +306,23 @@ void main() {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final identityKP = await SignalKeyHelper.generateX25519KeyPair();
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(1, signingKP);
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        1,
+        signingKP,
+      );
+      final invalidKemPublicKey = base64Encode(List.filled(32, 0xAA));
+      final invalidKemSignature = await SignalKeyHelper.sign(
+        signingKP.privateKey,
+        RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+          keyId: 1,
+          publicKey: invalidKemPublicKey,
+        ),
+      );
 
       // Provide an invalid Kyber public key (garbage bytes) to force
       // encapsulation failure.
       final bundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'bob-123',
         deviceId: 'device-1',
         identityKey: identityKP.publicKey,
@@ -288,7 +334,12 @@ void main() {
         ),
         kyberPreKey: KyberPreKeyPublic(
           keyId: 1,
-          publicKey: base64Encode(List.filled(32, 0xAA)), // Invalid Kyber key
+          publicKey: invalidKemPublicKey,
+          cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+          kemSuite: RisaalCryptoProtocol.kemSuite,
+          kemStandard: RisaalCryptoProtocol.kemStandard,
+          kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
+          signature: invalidKemSignature,
         ),
       );
 
@@ -302,7 +353,7 @@ void main() {
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            contains('Kyber encapsulation failed'),
+            contains('ML-KEM encapsulation failed'),
           ),
         ),
       );
@@ -316,7 +367,6 @@ void main() {
       final aliceResult = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: data.bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
       );
 
       // Provide garbage Kyber ciphertext to force decapsulation failure
@@ -329,13 +379,14 @@ void main() {
           senderEphemeralKey: aliceResult.ephemeralPublicKey,
           kyberKeyPair: data.kyberKP,
           kyberCiphertext: base64Encode(List.filled(32, 0xBB)), // Garbage
+          routing: aliceResult.routing,
           pqxdhPolicy: PqxdhPolicy.requirePq,
         ),
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            contains('Kyber decapsulation failed'),
+            contains('ML-KEM decapsulation failed'),
           ),
         ),
       );
@@ -343,117 +394,72 @@ void main() {
 
     // ── preferPq ───────────────────────────────────────────────────────
 
-    test('preferPq degrades gracefully when no Kyber key', () async {
+    test('preferPq is rejected before any classical downgrade', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final classical = await _generateClassicalBundle();
 
-      // Should NOT throw — degrades to classical X25519
-      final result = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceKP,
-        recipientBundle: classical.bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
+      await expectLater(
+        X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceKP,
+          recipientBundle: classical.bundle,
+          pqxdhPolicy: PqxdhPolicy.preferPq,
+        ),
+        throwsA(isA<UnsupportedError>()),
       );
-
-      expect(result.sharedSecret, hasLength(32));
-      expect(result.pqxdhUsed, isFalse);
-      expect(result.kyberCiphertext, isNull);
     });
 
-    test('preferPq succeeds with Kyber and reports pqxdhUsed=true', () async {
+    test('preferPq is rejected even when current ML-KEM exists', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final data = await _generateFullBundle();
 
-      final result = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceKP,
-        recipientBundle: data.bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
-      );
-
-      expect(result.sharedSecret, hasLength(32));
-      expect(result.pqxdhUsed, isTrue);
-      expect(result.kyberCiphertext, isNotNull);
-      expect(result.kyberCiphertext, isNotEmpty);
-    });
-
-    test('preferPq degrades gracefully on Kyber encapsulation failure',
-        () async {
-      final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
-      final identityKP = await SignalKeyHelper.generateX25519KeyPair();
-      final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(1, signingKP);
-
-      // Invalid Kyber key forces encapsulation failure
-      final bundle = PreKeyBundle(
-        userId: 'bob-123',
-        deviceId: 'device-1',
-        identityKey: identityKP.publicKey,
-        identitySigningKey: signingKP.publicKey,
-        signedPreKey: SignedPreKeyPublic(
-          keyId: signedPreKey.keyId,
-          publicKey: signedPreKey.keyPair.publicKey,
-          signature: signedPreKey.signature,
+      await expectLater(
+        X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceKP,
+          recipientBundle: data.bundle,
+          pqxdhPolicy: PqxdhPolicy.preferPq,
         ),
-        kyberPreKey: KyberPreKeyPublic(
-          keyId: 1,
-          publicKey: base64Encode(List.filled(32, 0xAA)), // Bad key
-        ),
+        throwsA(isA<UnsupportedError>()),
       );
-
-      // Should NOT throw (preferPq) — degrades gracefully
-      final result = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceKP,
-        recipientBundle: bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
-      );
-
-      expect(result.sharedSecret, hasLength(32));
-      expect(result.pqxdhUsed, isFalse);
-      expect(result.kyberCiphertext, isNull);
     });
 
     // ── classicalOnly ──────────────────────────────────────────────────
 
-    test('classicalOnly ignores Kyber even when bundle has Kyber key',
-        () async {
+    test('classicalOnly is rejected even when bundle has ML-KEM', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final data = await _generateFullBundle();
 
-      final result = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceKP,
-        recipientBundle: data.bundle,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
+      await expectLater(
+        X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceKP,
+          recipientBundle: data.bundle,
+          pqxdhPolicy: PqxdhPolicy.classicalOnly,
+        ),
+        throwsA(isA<UnsupportedError>()),
       );
-
-      expect(result.sharedSecret, hasLength(32));
-      expect(result.pqxdhUsed, isFalse);
-      expect(result.kyberCiphertext, isNull);
     });
 
-    test('classicalOnly responder ignores Kyber ciphertext', () async {
+    test('classicalOnly responder is rejected before key agreement', () async {
       final data = await _generateFullBundle();
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
-
-      // Initiate with classicalOnly (no Kyber ciphertext produced)
       final aliceResult = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: data.bundle,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
       );
 
-      // Responder with classicalOnly should also produce the same secret
-      final bobSecret = await X3DH.respondKeyAgreement(
-        identityKeyPair: data.identityKP,
-        signedPreKey: data.signedPreKey,
-        oneTimePreKey: data.otpk,
-        senderIdentityKey: aliceKP.publicKey,
-        senderEphemeralKey: aliceResult.ephemeralPublicKey,
-        kyberKeyPair: data.kyberKP,
-        kyberCiphertext: aliceResult.kyberCiphertext,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
+      await expectLater(
+        X3DH.respondKeyAgreement(
+          identityKeyPair: data.identityKP,
+          signedPreKey: data.signedPreKey,
+          oneTimePreKey: data.otpk,
+          senderIdentityKey: aliceKP.publicKey,
+          senderEphemeralKey: aliceResult.ephemeralPublicKey,
+          kyberKeyPair: data.kyberKP,
+          kyberCiphertext: aliceResult.kyberCiphertext!,
+          routing: aliceResult.routing,
+          pqxdhPolicy: PqxdhPolicy.classicalOnly,
+        ),
+        throwsA(isA<UnsupportedError>()),
       );
-
-      expect(aliceResult.sharedSecret, equals(bobSecret));
     });
 
     // ── pqxdhUsed flag correctness ─────────────────────────────────────
@@ -478,70 +484,56 @@ void main() {
         senderIdentityKey: aliceKP.publicKey,
         senderEphemeralKey: result.ephemeralPublicKey,
         kyberKeyPair: data.kyberKP,
-        kyberCiphertext: result.kyberCiphertext,
+        kyberCiphertext: result.kyberCiphertext!,
+        routing: result.routing,
       );
 
       expect(result.sharedSecret, equals(bobSecret));
     });
 
-    test('pqxdhUsed is false when no Kyber key available under preferPq',
-        () async {
+    test('missing ML-KEM cannot be bypassed with preferPq', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final classical = await _generateClassicalBundle();
 
-      // The library default is now requirePq; this test specifically exercises
-      // the preferPq fallback, so we opt in explicitly.
-      final result = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceKP,
-        recipientBundle: classical.bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
+      await expectLater(
+        X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceKP,
+          recipientBundle: classical.bundle,
+          pqxdhPolicy: PqxdhPolicy.preferPq,
+        ),
+        throwsA(isA<UnsupportedError>()),
       );
-
-      expect(result.pqxdhUsed, isFalse);
-      expect(result.kyberCiphertext, isNull);
     });
 
     // ── PQXDH shared secret differs from classical-only ────────────────
 
-    test('PQXDH shared secret differs from classical-only for same bundle',
-        () async {
+    test('classical-only comparison path is unavailable in epoch 2', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final data = await _generateFullBundle();
 
-      // Cannot directly compare secrets because ephemeral keys differ per
-      // invocation. Instead, verify that classicalOnly produces a different
-      // secret structure (no Kyber contribution).
       final pqResult = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: data.bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
       );
 
-      final classicalResult = await X3DH.initiateKeyAgreement(
-        identityKeyPair: aliceKP,
-        recipientBundle: data.bundle,
-        pqxdhPolicy: PqxdhPolicy.classicalOnly,
-      );
-
-      // Both should produce valid 32-byte secrets, but they will differ
-      // because (a) different ephemeral keys and (b) different KDF input.
       expect(pqResult.sharedSecret, hasLength(32));
-      expect(classicalResult.sharedSecret, hasLength(32));
       expect(pqResult.pqxdhUsed, isTrue);
-      expect(classicalResult.pqxdhUsed, isFalse);
-
-      // The secrets should differ (different ephemeral keys + Kyber)
-      expect(
-          pqResult.sharedSecret, isNot(equals(classicalResult.sharedSecret)));
+      await expectLater(
+        X3DH.initiateKeyAgreement(
+          identityKeyPair: aliceKP,
+          recipientBundle: data.bundle,
+          pqxdhPolicy: PqxdhPolicy.classicalOnly,
+        ),
+        throwsA(isA<UnsupportedError>()),
+      );
     });
 
-    // ── Default policy is preferPq ─────────────────────────────────────
+    // ── Default policy is requirePq ────────────────────────────────────
 
-    test('default policy is preferPq (Kyber used when available)', () async {
+    test('default policy requires ML-KEM', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final data = await _generateFullBundle();
 
-      // No explicit policy — should default to preferPq
       final result = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: data.bundle,
@@ -558,72 +550,66 @@ void main() {
 
   group('First-Session Kyber Downgrade Protection (Issue #5)', () {
     test(
-        'first-contact + requirePq + no Kyber → throws PqxdhDowngradeError',
-        () async {
-      final storage = FakeSecureStorage();
-      final eventBus = SecurityEventBus();
-      final manager = SignalProtocolManager(
-        secureStorage: storage,
-        securityEventBus: eventBus,
-      );
-      await manager.initialize();
+      'first-contact + requirePq + no ML-KEM rejects before session mutation',
+      () async {
+        final storage = FakeSecureStorage();
+        final eventBus = SecurityEventBus();
+        final manager = SignalProtocolManager(
+          secureStorage: storage,
+          securityEventBus: eventBus,
+        );
+        await manager.wipeForFreshRegistration();
+        await manager.initialize();
 
-      // Generate a classical bundle (no Kyber key)
-      final classical = await _generateClassicalBundle();
+        // Generate a classical bundle (no Kyber key)
+        final classical = await _generateClassicalBundle();
 
-      // createSession with requirePq should throw on first contact
-      expect(
-        () => manager.createSession(
-          classical.bundle,
-          pqxdhPolicy: PqxdhPolicy.requirePq,
-        ),
-        throwsA(isA<PqxdhDowngradeError>()),
-      );
-    });
+        await expectLater(
+          () => manager.createSession(
+            classical.bundle,
+            pqxdhPolicy: PqxdhPolicy.requirePq,
+          ),
+          throwsA(isA<FormatException>()),
+        );
+        expect(
+          await manager.hasSession(
+            classical.bundle.userId,
+            classical.bundle.deviceId,
+          ),
+          isFalse,
+        );
+      },
+    );
 
     test(
-        'first-contact + preferPq + no Kyber → emits firstSessionNoPqxdh, session proceeds',
-        () async {
-      final storage = FakeSecureStorage();
-      final eventBus = SecurityEventBus();
-      final manager = SignalProtocolManager(
-        secureStorage: storage,
-        securityEventBus: eventBus,
-      );
-      await manager.initialize();
+      'first-contact + preferPq is rejected without creating a session',
+      () async {
+        final storage = FakeSecureStorage();
+        final eventBus = SecurityEventBus();
+        final manager = SignalProtocolManager(
+          secureStorage: storage,
+          securityEventBus: eventBus,
+        );
+        await manager.wipeForFreshRegistration();
+        await manager.initialize();
 
-      // Generate a classical bundle (no Kyber key)
-      final classical = await _generateClassicalBundle();
+        // Generate a classical bundle (no Kyber key)
+        final classical = await _generateClassicalBundle();
 
-      // Collect events
-      final events = <SecurityEvent>[];
-      eventBus.events.listen(events.add);
+        await expectLater(
+          manager.createSession(
+            classical.bundle,
+            pqxdhPolicy: PqxdhPolicy.preferPq,
+          ),
+          throwsA(isA<UnsupportedError>()),
+        );
 
-      // createSession with preferPq should proceed
-      await manager.createSession(
-        classical.bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
-      );
-
-      // Should have a session now
-      final hasSession = await manager.hasSession(
-        classical.bundle.userId,
-        classical.bundle.deviceId,
-      );
-      expect(hasSession, isTrue);
-
-      // Should have emitted firstSessionNoPqxdh event
-      expect(
-        events.any((e) => e.type == SecurityEventType.firstSessionNoPqxdh),
-        isTrue,
-      );
-
-      // Check metadata
-      final event = events.firstWhere(
-        (e) => e.type == SecurityEventType.firstSessionNoPqxdh,
-      );
-      expect(event.metadata['policy'], equals('preferPq'));
-      expect(event.metadata['action'], equals('proceeding_without_pq'));
-    });
+        final hasSession = await manager.hasSession(
+          classical.bundle.userId,
+          classical.bundle.deviceId,
+        );
+        expect(hasSession, isFalse);
+      },
+    );
   });
 }

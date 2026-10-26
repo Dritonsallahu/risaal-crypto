@@ -73,8 +73,9 @@ class SafetyNumber {
     final userIdBytes = utf8.encode(userId);
 
     // Initial hash input: version + identityKey + userId
-    final initialInput =
-        Uint8List(1 + identityKeyBytes.length + userIdBytes.length);
+    final initialInput = Uint8List(
+      1 + identityKeyBytes.length + userIdBytes.length,
+    );
     initialInput[0] = _version;
     initialInput.setRange(1, 1 + identityKeyBytes.length, identityKeyBytes);
     initialInput.setRange(
@@ -101,7 +102,8 @@ class SafetyNumber {
     for (var i = 0; i < 6; i++) {
       // Use 5 bytes per group for better entropy distribution
       final offset = i * 5;
-      final value = (hashBytes[offset] << 32) |
+      final value =
+          (hashBytes[offset] << 32) |
           (hashBytes[offset + 1] << 24) |
           (hashBytes[offset + 2] << 16) |
           (hashBytes[offset + 3] << 8) |

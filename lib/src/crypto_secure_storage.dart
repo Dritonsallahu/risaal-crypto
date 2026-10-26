@@ -1,6 +1,8 @@
 /// Declares the security level of the storage backend.
 enum StorageSecurityLevel {
-  /// Hardware-backed: iOS Keychain (Secure Enclave), Android Keystore.
+  /// Hardware-backed: key material wrapped by a non-exportable Keystore /
+  /// Secure Enclave key. NOTE: not currently wired in production — the app
+  /// declares [softwareEncrypted] (see SecureStorageAdapter).
   hardwareBacked,
 
   /// Software-encrypted: EncryptedSharedPreferences, SQLCipher.
@@ -18,8 +20,8 @@ enum StorageSecurityLevel {
 /// ensuring platform-appropriate security.
 ///
 /// Implementations should use platform-secure storage backends:
-///   - **iOS**: Keychain Services (hardware-backed when available)
-///   - **Android**: EncryptedSharedPreferences backed by Android Keystore
+///   - **iOS**: Keychain Services (software-encrypted at rest, device-only)
+///   - **Android**: EncryptedSharedPreferences (AES, Keystore-wrapped master key)
 ///   - **Tests**: In-memory Map (see `test/helpers/fake_secure_storage.dart`)
 ///
 /// All keys are stored as JSON-serialized strings. The storage layer is
@@ -58,13 +60,17 @@ abstract class CryptoSecureStorage {
   /// Implementations must declare their security level so the crypto layer
   /// can warn when running on an insecure backend (e.g. in-memory Map).
   StorageSecurityLevel get securityLevel;
+
   /// Write a key-value pair to secure storage.
   ///
   /// Called by the crypto layer to persist identity keys, sessions, pre-keys,
   /// and other cryptographic state. The value is always a JSON-serialized string.
   ///
-  /// This operation must be atomic. If the write fails, the future should
-  /// complete with an error and the previous value (if any) should remain intact.
+  /// This operation must be atomic: readers observe either the complete old
+  /// value or the complete new value, never a torn value. A platform/backend
+  /// error may be reported after the new value committed, so callers that own a
+  /// durable protocol transition must treat thrown completion as ambiguous and
+  /// reconcile by rereading the exact value before retrying.
   Future<void> write({required String key, required String value});
 
   /// Read a value from secure storage.
@@ -80,7 +86,8 @@ abstract class CryptoSecureStorage {
   ///
   /// Called when a session is removed (e.g., after verifying a safety number
   /// mismatch) or when a one-time pre-key is consumed. Does not fail if the
-  /// key does not exist.
+  /// key does not exist. As with [write], a thrown completion may be ambiguous:
+  /// the key can already be absent, so durable protocol callers must reread.
   Future<void> delete({required String key});
 
   /// Delete all stored values.
@@ -89,4 +96,11 @@ abstract class CryptoSecureStorage {
   /// This is a destructive operation with no undo. Implementations should
   /// ensure this completes even if individual deletes fail.
   Future<void> clearAll();
+
+  /// Atomically clear every account-scoped value before fresh registration.
+  ///
+  /// The default clears the entire backend. App adapters may preserve only
+  /// explicitly device-scoped values, but must use a delete-all + whitelist
+  /// restore strategy rather than best-effort key enumeration.
+  Future<void> clearAccountScopedValues() => clearAll();
 }

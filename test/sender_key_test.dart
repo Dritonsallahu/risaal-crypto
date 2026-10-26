@@ -19,64 +19,72 @@ Future<(SenderKeyManager manager, FakeSecureStorage storage)> _createManager(
 
 void main() {
   group('SenderKeyManager key generation', () {
-    test('generateSenderKey creates a valid distribution with non-empty fields',
-        () async {
-      final (manager, _) = await _createManager('alice');
-      const groupId = 'group-001';
+    test(
+      'generateSenderKey creates a valid distribution with non-empty fields',
+      () async {
+        final (manager, _) = await _createManager('alice');
+        const groupId = 'group-001';
 
-      final distribution = await manager.generateSenderKey(groupId);
+        final distribution = await manager.generateSenderKey(groupId);
 
-      expect(distribution.groupId, groupId);
-      expect(distribution.senderId, 'alice');
-      expect(distribution.iteration, 0);
-      expect(distribution.chainKey, isNotEmpty);
-      expect(distribution.signingKey, isNotEmpty);
-    });
+        expect(distribution.groupId, groupId);
+        expect(distribution.senderId, 'alice');
+        expect(distribution.iteration, 0);
+        expect(distribution.chainKey, isNotEmpty);
+        expect(distribution.signingKey, isNotEmpty);
+      },
+    );
 
-    test('generateSenderKey creates different keys each time (not idempotent)',
-        () async {
-      final (manager, _) = await _createManager('alice');
-      const groupId = 'group-001';
+    test(
+      'generateSenderKey creates different keys each time (not idempotent)',
+      () async {
+        final (manager, _) = await _createManager('alice');
+        const groupId = 'group-001';
 
-      final dist1 = await manager.generateSenderKey(groupId);
-      final dist2 = await manager.generateSenderKey(groupId);
+        final dist1 = await manager.generateSenderKey(groupId);
+        final dist2 = await manager.generateSenderKey(groupId);
 
-      // GroupId and senderId should be same
-      expect(dist2.groupId, dist1.groupId);
-      expect(dist2.senderId, dist1.senderId);
-      // But the random keys should be different
-      expect(dist2.chainKey, isNot(dist1.chainKey));
-      expect(dist2.signingKey, isNot(dist1.signingKey));
-    });
+        // GroupId and senderId should be same
+        expect(dist2.groupId, dist1.groupId);
+        expect(dist2.senderId, dist1.senderId);
+        // But the random keys should be different
+        expect(dist2.chainKey, isNot(dist1.chainKey));
+        expect(dist2.signingKey, isNot(dist1.signingKey));
+      },
+    );
 
-    test('Distribution has correct groupId, senderId matching stored user_id',
-        () async {
-      final (manager, storage) = await _createManager('bob-user-id');
-      const groupId = 'test-group';
+    test(
+      'Distribution has correct groupId, senderId matching stored user_id',
+      () async {
+        final (manager, storage) = await _createManager('bob-user-id');
+        const groupId = 'test-group';
 
-      final distribution = await manager.generateSenderKey(groupId);
+        final distribution = await manager.generateSenderKey(groupId);
 
-      expect(distribution.groupId, groupId);
-      expect(distribution.senderId, 'bob-user-id');
-      final storedUserId = await storage.read(key: 'user_id');
-      expect(distribution.senderId, storedUserId);
-    });
+        expect(distribution.groupId, groupId);
+        expect(distribution.senderId, 'bob-user-id');
+        final storedUserId = await storage.read(key: 'user_id');
+        expect(distribution.senderId, storedUserId);
+      },
+    );
 
-    test('Distribution chainKey is 32 bytes, signingKey is Ed25519 public key',
-        () async {
-      final (manager, _) = await _createManager('alice');
-      const groupId = 'group-001';
+    test(
+      'Distribution chainKey is 32 bytes, signingKey is Ed25519 public key',
+      () async {
+        final (manager, _) = await _createManager('alice');
+        const groupId = 'group-001';
 
-      final distribution = await manager.generateSenderKey(groupId);
+        final distribution = await manager.generateSenderKey(groupId);
 
-      // Should be able to decode without error
-      final chainKeyBytes = base64Decode(distribution.chainKey);
-      final signingKeyBytes = base64Decode(distribution.signingKey);
+        // Should be able to decode without error
+        final chainKeyBytes = base64Decode(distribution.chainKey);
+        final signingKeyBytes = base64Decode(distribution.signingKey);
 
-      expect(chainKeyBytes.length, 32);
-      // Ed25519 public key is 32 bytes
-      expect(signingKeyBytes.length, 32);
-    });
+        expect(chainKeyBytes.length, 32);
+        // Ed25519 public key is 32 bytes
+        expect(signingKeyBytes.length, 32);
+      },
+    );
   });
 
   group('SenderKeyManager distribution processing', () {
@@ -100,24 +108,26 @@ void main() {
       expect(hasSenderKey, isTrue);
     });
 
-    test('hasSenderKeyFor returns true after processing distribution',
-        () async {
-      final (managerAlice, _) = await _createManager('alice');
-      final (managerBob, _) = await _createManager('bob');
-      const groupId = 'group-001';
+    test(
+      'hasSenderKeyFor returns true after processing distribution',
+      () async {
+        final (managerAlice, _) = await _createManager('alice');
+        final (managerBob, _) = await _createManager('bob');
+        const groupId = 'group-001';
 
-      final aliceDistribution = await managerAlice.generateSenderKey(groupId);
+        final aliceDistribution = await managerAlice.generateSenderKey(groupId);
 
-      expect(await managerBob.hasSenderKeyFor(groupId, 'alice'), isFalse);
+        expect(await managerBob.hasSenderKeyFor(groupId, 'alice'), isFalse);
 
-      await managerBob.processSenderKeyDistribution(
-        groupId,
-        'alice',
-        aliceDistribution,
-      );
+        await managerBob.processSenderKeyDistribution(
+          groupId,
+          'alice',
+          aliceDistribution,
+        );
 
-      expect(await managerBob.hasSenderKeyFor(groupId, 'alice'), isTrue);
-    });
+        expect(await managerBob.hasSenderKeyFor(groupId, 'alice'), isTrue);
+      },
+    );
 
     test('hasSenderKeyFor returns false for unknown sender', () async {
       final (manager, _) = await _createManager('alice');
@@ -212,29 +222,30 @@ void main() {
     });
 
     test(
-        'Same plaintext produces different ciphertexts (different IV each time)',
-        () async {
-      final (manager, _) = await _createManager('alice');
-      const groupId = 'group-001';
+      'Same plaintext produces different ciphertexts (different IV each time)',
+      () async {
+        final (manager, _) = await _createManager('alice');
+        const groupId = 'group-001';
 
-      await manager.generateSenderKey(groupId);
+        await manager.generateSenderKey(groupId);
 
-      final plaintext = utf8.encode('Same message');
+        final plaintext = utf8.encode('Same message');
 
-      final enc1 = await manager.encrypt(groupId, plaintext);
-      final enc2 = await manager.encrypt(groupId, plaintext);
+        final enc1 = await manager.encrypt(groupId, plaintext);
+        final enc2 = await manager.encrypt(groupId, plaintext);
 
-      // v3 format: IV field is empty, nonce is embedded in ciphertext blob.
-      // Layout: [0x03, epoch(4 LE @1..5), nonce(12 @5..17), ct, mac].
-      // The nonce slice starts at offset 5 (after the version + epoch bytes).
-      final nonce1 = base64Decode(enc1.ciphertext).sublist(5, 17);
-      final nonce2 = base64Decode(enc2.ciphertext).sublist(5, 17);
-      expect(nonce1, isNot(equals(nonce2)));
-      // Different ciphertexts (because of nonce and chain key ratchet)
-      expect(enc1.ciphertext, isNot(enc2.ciphertext));
-      // Different iterations
-      expect(enc2.iteration, enc1.iteration + 1);
-    });
+        // v3 format: IV field is empty, nonce is embedded in ciphertext blob.
+        // Layout: [0x03, epoch(4 LE @1..5), nonce(12 @5..17), ct, mac].
+        // The nonce slice starts at offset 5 (after the version + epoch bytes).
+        final nonce1 = base64Decode(enc1.ciphertext).sublist(5, 17);
+        final nonce2 = base64Decode(enc2.ciphertext).sublist(5, 17);
+        expect(nonce1, isNot(equals(nonce2)));
+        // Different ciphertexts (because of nonce and chain key ratchet)
+        expect(enc1.ciphertext, isNot(enc2.ciphertext));
+        // Different iterations
+        expect(enc2.iteration, enc1.iteration + 1);
+      },
+    );
 
     test('Ciphertext is valid base64', () async {
       final (manager, _) = await _createManager('alice');
@@ -294,11 +305,7 @@ void main() {
       );
 
       await managerAlice.processSenderKeyDistribution(groupId, 'bob', bobDist);
-      await managerCarol.processSenderKeyDistribution(
-        groupId,
-        'bob',
-        bobDist,
-      );
+      await managerCarol.processSenderKeyDistribution(groupId, 'bob', bobDist);
 
       await managerAlice.processSenderKeyDistribution(
         groupId,
@@ -317,8 +324,11 @@ void main() {
 
       // Bob and Carol decrypt
       final bobDecAlice = await managerBob.decrypt(groupId, 'alice', aliceEnc);
-      final carolDecAlice =
-          await managerCarol.decrypt(groupId, 'alice', aliceEnc);
+      final carolDecAlice = await managerCarol.decrypt(
+        groupId,
+        'alice',
+        aliceEnc,
+      );
 
       expect(utf8.decode(bobDecAlice), 'From Alice');
       expect(utf8.decode(carolDecAlice), 'From Alice');
@@ -339,143 +349,157 @@ void main() {
       final carolEnc = await managerCarol.encrypt(groupId, carolMsg);
 
       // Alice and Bob decrypt
-      final aliceDecCarol =
-          await managerAlice.decrypt(groupId, 'carol', carolEnc);
+      final aliceDecCarol = await managerAlice.decrypt(
+        groupId,
+        'carol',
+        carolEnc,
+      );
       final bobDecCarol = await managerBob.decrypt(groupId, 'carol', carolEnc);
 
       expect(utf8.decode(aliceDecCarol), 'From Carol');
       expect(utf8.decode(bobDecCarol), 'From Carol');
     });
 
-    test('Each member has their own sender key and iteration counter',
-        () async {
-      final (managerAlice, _) = await _createManager('alice');
-      final (managerBob, _) = await _createManager('bob');
-      const groupId = 'group-001';
+    test(
+      'Each member has their own sender key and iteration counter',
+      () async {
+        final (managerAlice, _) = await _createManager('alice');
+        final (managerBob, _) = await _createManager('bob');
+        const groupId = 'group-001';
 
-      final aliceDist = await managerAlice.generateSenderKey(groupId);
-      final bobDist = await managerBob.generateSenderKey(groupId);
+        final aliceDist = await managerAlice.generateSenderKey(groupId);
+        final bobDist = await managerBob.generateSenderKey(groupId);
 
-      await managerBob.processSenderKeyDistribution(
-        groupId,
-        'alice',
-        aliceDist,
-      );
-      await managerAlice.processSenderKeyDistribution(groupId, 'bob', bobDist);
+        await managerBob.processSenderKeyDistribution(
+          groupId,
+          'alice',
+          aliceDist,
+        );
+        await managerAlice.processSenderKeyDistribution(
+          groupId,
+          'bob',
+          bobDist,
+        );
 
-      // Alice sends 3 messages
-      for (var i = 0; i < 3; i++) {
-        await managerAlice.encrypt(groupId, utf8.encode('Alice msg $i'));
-      }
+        // Alice sends 3 messages
+        for (var i = 0; i < 3; i++) {
+          await managerAlice.encrypt(groupId, utf8.encode('Alice msg $i'));
+        }
 
-      // Bob sends 2 messages
-      for (var i = 0; i < 2; i++) {
-        await managerBob.encrypt(groupId, utf8.encode('Bob msg $i'));
-      }
+        // Bob sends 2 messages
+        for (var i = 0; i < 2; i++) {
+          await managerBob.encrypt(groupId, utf8.encode('Bob msg $i'));
+        }
 
-      // Iterations should be independent
-      final aliceNextMsg = await managerAlice.encrypt(
-        groupId,
-        utf8.encode('Alice msg 3'),
-      );
-      final bobNextMsg =
-          await managerBob.encrypt(groupId, utf8.encode('Bob msg 2'));
+        // Iterations should be independent
+        final aliceNextMsg = await managerAlice.encrypt(
+          groupId,
+          utf8.encode('Alice msg 3'),
+        );
+        final bobNextMsg = await managerBob.encrypt(
+          groupId,
+          utf8.encode('Bob msg 2'),
+        );
 
-      expect(aliceNextMsg.iteration, 3);
-      expect(bobNextMsg.iteration, 2);
-    });
+        expect(aliceNextMsg.iteration, 3);
+        expect(bobNextMsg.iteration, 2);
+      },
+    );
   });
 
   group('SenderKeyManager forward secrecy', () {
     test(
-        'After sending N messages, earlier chain keys are gone (can\'t decrypt old messages with new state)',
-        () async {
-      final (managerAlice, storageAlice) = await _createManager('alice');
-      final (managerBob, storageBob) = await _createManager('bob');
-      const groupId = 'group-001';
+      'After sending N messages, earlier chain keys are gone (can\'t decrypt old messages with new state)',
+      () async {
+        final (managerAlice, storageAlice) = await _createManager('alice');
+        final (managerBob, storageBob) = await _createManager('bob');
+        const groupId = 'group-001';
 
-      final aliceDist = await managerAlice.generateSenderKey(groupId);
-      await managerBob.processSenderKeyDistribution(
-        groupId,
-        'alice',
-        aliceDist,
-      );
+        final aliceDist = await managerAlice.generateSenderKey(groupId);
+        await managerBob.processSenderKeyDistribution(
+          groupId,
+          'alice',
+          aliceDist,
+        );
 
-      // Alice sends message at iteration 0
-      final msg0 = await managerAlice.encrypt(
-        groupId,
-        utf8.encode('Message 0'),
-      );
+        // Alice sends message at iteration 0
+        final msg0 = await managerAlice.encrypt(
+          groupId,
+          utf8.encode('Message 0'),
+        );
 
-      // Bob decrypts it (advances his chain to iteration 1)
-      await managerBob.decrypt(groupId, 'alice', msg0);
+        // Bob decrypts it (advances his chain to iteration 1)
+        await managerBob.decrypt(groupId, 'alice', msg0);
 
-      // Alice sends 10 more messages
-      for (var i = 1; i <= 10; i++) {
-        await managerAlice.encrypt(groupId, utf8.encode('Message $i'));
-      }
+        // Alice sends 10 more messages
+        for (var i = 1; i <= 10; i++) {
+          await managerAlice.encrypt(groupId, utf8.encode('Message $i'));
+        }
 
-      // Now Bob's state has moved forward. Trying to decrypt msg0 again
-      // should fail because iteration has moved past it.
-      // The decrypt should throw because msg0.iteration (0) < stored iteration (1)
-      await expectLater(
-        () => managerBob.decrypt(groupId, 'alice', msg0),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('is behind stored iteration'),
+        // Now Bob's state has moved forward. Trying to decrypt msg0 again
+        // should fail because iteration has moved past it.
+        // The decrypt should throw because msg0.iteration (0) < stored iteration (1)
+        await expectLater(
+          () => managerBob.decrypt(groupId, 'alice', msg0),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('is behind stored iteration'),
+            ),
           ),
-        ),
-      );
+        );
 
-      // Verify chain keys are actually different (implicitly tested by the
-      // fact that the state has moved forward)
-      expect(await managerBob.hasSenderKeyFor(groupId, 'alice'), isTrue);
-    });
+        // Verify chain keys are actually different (implicitly tested by the
+        // fact that the state has moved forward)
+        expect(await managerBob.hasSenderKeyFor(groupId, 'alice'), isTrue);
+      },
+    );
   });
 
   group('SenderKeyManager adversarial', () {
     test(
-        'Tampered ciphertext -> decrypt throws (Ed25519 signature verification fails)',
-        () async {
-      final (managerAlice, _) = await _createManager('alice');
-      final (managerBob, _) = await _createManager('bob');
-      const groupId = 'group-001';
+      'Tampered ciphertext -> decrypt throws (Ed25519 signature verification fails)',
+      () async {
+        final (managerAlice, _) = await _createManager('alice');
+        final (managerBob, _) = await _createManager('bob');
+        const groupId = 'group-001';
 
-      final aliceDist = await managerAlice.generateSenderKey(groupId);
-      await managerBob.processSenderKeyDistribution(
-        groupId,
-        'alice',
-        aliceDist,
-      );
+        final aliceDist = await managerAlice.generateSenderKey(groupId);
+        await managerBob.processSenderKeyDistribution(
+          groupId,
+          'alice',
+          aliceDist,
+        );
 
-      final encrypted = await managerAlice.encrypt(
-        groupId,
-        utf8.encode('Original message'),
-      );
+        final encrypted = await managerAlice.encrypt(
+          groupId,
+          utf8.encode('Original message'),
+        );
 
-      // Tamper with the ciphertext
-      final tamperedCiphertext = base64Decode(encrypted.ciphertext);
-      tamperedCiphertext[0] ^= 0xFF; // Flip bits
-      final tamperedMessage = SenderKeyMessage(
-        iteration: encrypted.iteration,
-        ciphertext: base64Encode(tamperedCiphertext),
-        iv: encrypted.iv,
-        signature: encrypted.signature,
-      );
+        // Tamper with the ciphertext
+        final tamperedCiphertext = base64Decode(encrypted.ciphertext);
+        tamperedCiphertext[20] ^=
+            0xFF; // Preserve v3 marker; tamper signed body.
+        final tamperedMessage = SenderKeyMessage(
+          iteration: encrypted.iteration,
+          ciphertext: base64Encode(tamperedCiphertext),
+          iv: encrypted.iv,
+          signature: encrypted.signature,
+        );
 
-      await expectLater(
-        () => managerBob.decrypt(groupId, 'alice', tamperedMessage),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('Ed25519 signature verification failed'),
+        await expectLater(
+          () => managerBob.decrypt(groupId, 'alice', tamperedMessage),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('Ed25519 signature verification failed'),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
     test('Tampered signature -> decrypt throws', () async {
       final (managerAlice, _) = await _createManager('alice');
@@ -623,51 +647,66 @@ void main() {
       );
     });
 
-    test('Message iteration skip > 256 -> decrypt throws (DoS protection)',
-        () async {
-      final (managerAlice, _) = await _createManager('alice');
-      final (managerBob, _) = await _createManager('bob');
-      const groupId = 'group-001';
+    test(
+      'Message iteration skip beyond the bound -> decrypt throws (DoS)',
+      () async {
+        final (managerAlice, _) = await _createManager('alice');
+        final (managerBob, _) = await _createManager('bob');
+        const groupId = 'group-001';
 
-      final aliceDist = await managerAlice.generateSenderKey(groupId);
-      await managerBob.processSenderKeyDistribution(
-        groupId,
-        'alice',
-        aliceDist,
-      );
+        final aliceDist = await managerAlice.generateSenderKey(groupId);
+        await managerBob.processSenderKeyDistribution(
+          groupId,
+          'alice',
+          aliceDist,
+        );
 
-      // Create a message with iteration 300 (skip = 300)
-      final encrypted = await managerAlice.encrypt(
-        groupId,
-        utf8.encode('Message'),
-      );
-      final farFutureMessage = SenderKeyMessage(
-        iteration: 300,
-        ciphertext: encrypted.ciphertext,
-        iv: encrypted.iv,
-        signature: encrypted.signature,
-      );
+        // Re-labelling a real message to a far-future iteration breaks the
+        // signature, because the iteration is part of the signed input. That
+        // is now caught BEFORE any key derivation happens — which is the
+        // property that matters here.
+        //
+        // Deriving first meant a forged frame could make this device run
+        // thousands of HMAC operations on unauthenticated input, on the UI
+        // isolate, holding the sender-key lock, at whatever rate the relay
+        // chose to emit. The skip bound limited how many; it did not stop the
+        // work from being attacker-triggered. An unauthenticated frame now
+        // costs one Ed25519 verify.
+        final encrypted = await managerAlice.encrypt(
+          groupId,
+          utf8.encode('Message'),
+        );
+        final farFutureMessage = SenderKeyMessage(
+          iteration: 5000,
+          ciphertext: encrypted.ciphertext,
+          iv: encrypted.iv,
+          signature: encrypted.signature,
+        );
 
-      await expectLater(
-        () => managerBob.decrypt(groupId, 'alice', farFutureMessage),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('Too many skipped iterations'),
+        await expectLater(
+          () => managerBob.decrypt(groupId, 'alice', farFutureMessage),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('signature verification failed'),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   });
 
   group('SenderKeyMessage serialization', () {
     test('toJson/fromJson round-trip', () {
       final message = SenderKeyMessage(
         iteration: 42,
-        ciphertext: 'dGVzdA==',
-        iv: 'aXY=',
-        signature: 'c2ln',
+        ciphertext: base64Encode(<int>[
+          0x03,
+          ...List<int>.filled(4 + 12 + 1 + 16, 0),
+        ]),
+        iv: '',
+        signature: base64Encode(List<int>.filled(64, 7)),
       );
 
       final json = message.toJson();
@@ -680,12 +719,14 @@ void main() {
     });
 
     test('SenderKeyDistribution toJson/fromJson round-trip', () {
-      const distribution = SenderKeyDistribution(
+      final distribution = SenderKeyDistribution(
+        cryptoProtocolEpoch: 2,
         groupId: 'group-123',
         senderId: 'alice',
         iteration: 0,
-        chainKey: 'Y2hhaW4=',
-        signingKey: 'c2lnbmluZw==',
+        epoch: 0,
+        chainKey: base64Encode(List<int>.filled(32, 1)),
+        signingKey: base64Encode(List<int>.filled(32, 2)),
       );
 
       final json = distribution.toJson();
@@ -700,9 +741,11 @@ void main() {
 
     test('SenderKeyState toJson/fromJson round-trip (with private key)', () {
       final state = SenderKeyState(
+        cryptoProtocolEpoch: 2,
         groupId: 'group-456',
         senderId: 'bob',
         iteration: 5,
+        epoch: 0,
         chainKey: List.generate(32, (i) => i),
         signingPublicKey: base64Encode(List.generate(32, (i) => i + 100)),
         signingPrivateKey: base64Encode(List.generate(64, (i) => i + 50)),
@@ -721,9 +764,11 @@ void main() {
 
     test('SenderKeyState toJson/fromJson round-trip (public key only)', () {
       final state = SenderKeyState(
+        cryptoProtocolEpoch: 2,
         groupId: 'group-456',
         senderId: 'bob',
         iteration: 5,
+        epoch: 0,
         chainKey: List.generate(32, (i) => i),
         signingPublicKey: base64Encode(List.generate(32, (i) => i + 100)),
         signingPrivateKey: null,
@@ -740,7 +785,7 @@ void main() {
       expect(restored.signingPrivateKey, isNull);
     });
 
-    test('SenderKeyState fromJson handles legacy HMAC format', () {
+    test('SenderKeyState fromJson rejects legacy HMAC format', () {
       // Legacy format used 'signingKey' as a shared HMAC key
       final legacyJson = {
         'groupId': 'group-legacy',
@@ -750,15 +795,10 @@ void main() {
         'signingKey': base64Encode(List.generate(32, (i) => i + 200)),
       };
 
-      final restored = SenderKeyState.fromJson(legacyJson);
-
-      expect(restored.groupId, 'group-legacy');
-      expect(restored.senderId, 'alice');
-      expect(restored.iteration, 3);
-      // Legacy signing key should be treated as public key
-      expect(restored.signingPublicKey, legacyJson['signingKey']);
-      // No private key in legacy format
-      expect(restored.signingPrivateKey, isNull);
+      expect(
+        () => SenderKeyState.fromJson(legacyJson),
+        throwsA(isA<FormatException>()),
+      );
     });
   });
 
@@ -776,8 +816,11 @@ void main() {
       // is now 0x03 and the layout grew by 4 bytes for the epoch.
       // Layout: version(1) + epoch(4 LE) + nonce(12) + ciphertext(N) + mac(16)
       final ctBytes = base64Decode(message.ciphertext);
-      expect(ctBytes[0], equals(0x03),
-          reason: 'First byte should be version 0x03 (GCM-v3 with epoch AAD)');
+      expect(
+        ctBytes[0],
+        equals(0x03),
+        reason: 'First byte should be version 0x03 (GCM-v3 with epoch AAD)',
+      );
       expect(ctBytes.length, greaterThan(1 + 4 + 12 + 1 + 16));
     });
 
@@ -786,8 +829,7 @@ void main() {
       const groupId = 'group-gcm';
 
       await manager.generateSenderKey(groupId);
-      final message =
-          await manager.encrypt(groupId, utf8.encode('Test'));
+      final message = await manager.encrypt(groupId, utf8.encode('Test'));
 
       expect(message.iv, isEmpty);
     });
@@ -799,12 +841,14 @@ void main() {
 
       final aliceDist = await managerAlice.generateSenderKey(groupId);
       await managerBob.processSenderKeyDistribution(
-          groupId, 'alice', aliceDist);
+        groupId,
+        'alice',
+        aliceDist,
+      );
 
       final plaintext = utf8.encode('GCM round-trip test message');
       final encrypted = await managerAlice.encrypt(groupId, plaintext);
-      final decrypted =
-          await managerBob.decrypt(groupId, 'alice', encrypted);
+      final decrypted = await managerBob.decrypt(groupId, 'alice', encrypted);
 
       expect(decrypted, equals(plaintext));
       expect(utf8.decode(decrypted), 'GCM round-trip test message');
@@ -817,10 +861,15 @@ void main() {
 
       final aliceDist = await managerAlice.generateSenderKey(groupId);
       await managerBob.processSenderKeyDistribution(
-          groupId, 'alice', aliceDist);
+        groupId,
+        'alice',
+        aliceDist,
+      );
 
       final encrypted = await managerAlice.encrypt(
-          groupId, utf8.encode('Secret'));
+        groupId,
+        utf8.encode('Secret'),
+      );
 
       // Tamper with a byte in the middle of the ciphertext blob
       // (past version byte and nonce, in the actual ciphertext portion)

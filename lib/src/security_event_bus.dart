@@ -9,11 +9,38 @@ enum SecurityEventType {
   /// A broken session was auto-reset (AES-GCM MAC failure).
   sessionReset,
 
+  /// A normal encrypted message failed AEAD authentication.
+  ///
+  /// This event is deliberately sanitized: callers must not attach the
+  /// underlying exception, ciphertext, peer identifiers, or plaintext.
+  messageAuthenticationRejected,
+
   /// Auto-reset was blocked because the rate limit was exceeded.
   resetRateLimitHit,
 
   /// Ed25519 or HMAC signature verification failed.
   signatureVerificationFailed,
+
+  /// The disappearing-message timer the relay serves for a conversation
+  /// disagrees with the one this user chose, or a frame tried to change it.
+  ///
+  /// The timer is a deletion promise. A relay that can move it can either keep
+  /// messages longer than the user agreed or destroy them sooner — the second
+  /// is immediate and affects both devices, because the recipient honours the
+  /// sender's sealed TTL. So the user's own choice is authoritative and a
+  /// disagreement is reported rather than silently resolved.
+  disappearingTimerDisagreement,
+
+  /// This device shared its group sender key with a member it has never
+  /// established an identity with.
+  ///
+  /// Group membership is asserted by the relay (MP-GRPAUTH-001), so this is the
+  /// one moment where a relay-invented account could gain read access to a
+  /// group. Refusing instead would permanently partition genuinely new members,
+  /// so the trade is made deliberately and surfaced rather than hidden. The key
+  /// shared is the EXISTING one at its current position — nothing already sent
+  /// becomes readable, and no new key material is minted.
+  groupKeySharedWithUnknownMember,
 
   /// A replayed message was rejected (duplicate message number).
   replayRejected,
@@ -61,6 +88,33 @@ enum SecurityEventType {
 
   /// Storage backend declared as insecure (plain SharedPreferences or in-memory).
   insecureStorageWarning,
+
+  /// A sealed envelope carried a sender certificate that failed verification
+  /// (R4-C3). Metadata: `reason` (a `SenderCertificateFailure` name) only.
+  ///
+  /// Sanitized like [messageAuthenticationRejected]: no ids, no keys, no
+  /// ciphertext, no certificate bytes.
+  senderCertificateRejected,
+
+  /// A sealed envelope carried a sender certificate, but the trust policy pins
+  /// no server signing key, so it was not evaluated (accept-both rollout).
+  /// Sanitized: no metadata.
+  senderCertificateIgnoredNoPinnedKey,
+
+  /// `requireCertified` rejected a sealed envelope without a verified sender
+  /// certificate. Sanitized: no metadata.
+  uncertifiedSealedSenderRejected,
+
+  /// `requireVerifiedFirstContact` rejected an uncertified first contact that
+  /// had no matching host approval. Metadata: `lane` (`sealed` | `direct`)
+  /// only.
+  unverifiedFirstContactRejected,
+
+  /// The host's `senderCertificateProvider` threw on a sealed send (R4-C3).
+  /// The send fell back to uncertified, or was refused with
+  /// `SenderCertificateRequiredError` under `requireCertifiedSend`.
+  /// Sanitized: no metadata (never the provider's error, ids or keys).
+  senderCertificateProviderFailed,
 }
 
 /// A single security event emitted by the crypto layer.
@@ -107,8 +161,8 @@ class SecurityEvent {
     this.sessionId = '',
     DateTime? timestamp,
     Map<String, dynamic>? metadata,
-  })  : timestamp = timestamp ?? DateTime.now(),
-        metadata = metadata ?? const {};
+  }) : timestamp = timestamp ?? DateTime.now(),
+       metadata = metadata ?? const {};
 
   @override
   String toString() =>
@@ -160,11 +214,7 @@ class SecurityEventBus {
     String sessionId = '',
     Map<String, dynamic>? metadata,
   }) {
-    emit(SecurityEvent(
-      type: type,
-      sessionId: sessionId,
-      metadata: metadata,
-    ));
+    emit(SecurityEvent(type: type, sessionId: sessionId, metadata: metadata));
   }
 
   /// Close the bus. After this, no more events can be emitted.

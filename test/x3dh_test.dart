@@ -1,28 +1,43 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:risaal_crypto/src/crypto_protocol.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/x3dh.dart';
+
+import 'helpers/crypto_test_fixtures.dart';
 
 void main() {
   // ── Helper: generate a full PreKeyBundle simulating Bob's server-side keys ──
 
   Future<
-      (
-        PreKeyBundle bundle,
-        KeyPair identityKP,
-        KeyPair signingKP,
-        SignedPreKey signedPreKey,
-        OneTimePreKey otpk,
-        KyberKeyPair kyberKP
-      )> generateBobBundle() async {
+    (
+      PreKeyBundle bundle,
+      KeyPair identityKP,
+      KeyPair signingKP,
+      SignedPreKey signedPreKey,
+      OneTimePreKey otpk,
+      KyberKeyPair kyberKP,
+    )
+  >
+  generateBobBundle() async {
     final identityKP = await SignalKeyHelper.generateX25519KeyPair();
     final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-    final signedPreKey =
-        await SignalKeyHelper.generateSignedPreKey(1, signingKP);
+    final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+      1,
+      signingKP,
+    );
     final otpks = await SignalKeyHelper.generateOneTimePreKeys(1, 1);
     final kyberKP = SignalKeyHelper.generateKyberKeyPair();
+    final kyberSignature = await SignalKeyHelper.sign(
+      signingKP.privateKey,
+      RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+        keyId: kyberKP.keyId!,
+        publicKey: kyberKP.publicKey,
+      ),
+    );
 
     final bundle = PreKeyBundle(
+      opkRoute: testOpkRoute,
       userId: 'bob-123',
       deviceId: 'device-1',
       identityKey: identityKP.publicKey,
@@ -37,8 +52,13 @@ void main() {
         publicKey: otpks.first.keyPair.publicKey,
       ),
       kyberPreKey: KyberPreKeyPublic(
-        keyId: 1,
+        keyId: kyberKP.keyId!,
         publicKey: kyberKP.publicKey,
+        signature: kyberSignature,
+        cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+        kemSuite: RisaalCryptoProtocol.kemSuite,
+        kemStandard: RisaalCryptoProtocol.kemStandard,
+        kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
       ),
     );
 
@@ -68,7 +88,8 @@ void main() {
         senderIdentityKey: aliceIdentityKP.publicKey,
         senderEphemeralKey: aliceResult.ephemeralPublicKey,
         kyberKeyPair: bobKyberKP,
-        kyberCiphertext: aliceResult.kyberCiphertext,
+        kyberCiphertext: aliceResult.kyberCiphertext!,
+        routing: aliceResult.routing,
       );
 
       expect(aliceResult.sharedSecret, equals(bobSharedSecret));
@@ -96,10 +117,21 @@ void main() {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final identityKP = await SignalKeyHelper.generateX25519KeyPair();
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(1, signingKP);
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        1,
+        signingKP,
+      );
+      final kyberKP = SignalKeyHelper.generateKyberKeyPair();
+      final kyberSignature = await SignalKeyHelper.sign(
+        signingKP.privateKey,
+        RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+          keyId: kyberKP.keyId!,
+          publicKey: kyberKP.publicKey,
+        ),
+      );
 
       final bundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'bob-123',
         deviceId: 'device-1',
         identityKey: identityKP.publicKey,
@@ -109,16 +141,20 @@ void main() {
           publicKey: signedPreKey.keyPair.publicKey,
           signature: signedPreKey.signature,
         ),
-        // No oneTimePreKey, no kyberPreKey
+        kyberPreKey: KyberPreKeyPublic(
+          keyId: kyberKP.keyId!,
+          publicKey: kyberKP.publicKey,
+          signature: kyberSignature,
+          cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+          kemSuite: RisaalCryptoProtocol.kemSuite,
+          kemStandard: RisaalCryptoProtocol.kemStandard,
+          kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
+        ),
       );
 
-      // This test is about OPK absence, not Kyber absence. Explicitly use
-      // preferPq so we can still exercise the no-OPK classical path without
-      // tripping the default requirePq guard.
       final aliceResult = await X3DH.initiateKeyAgreement(
         identityKeyPair: aliceKP,
         recipientBundle: bundle,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
       );
 
       final bobSharedSecret = await X3DH.respondKeyAgreement(
@@ -127,12 +163,14 @@ void main() {
         oneTimePreKey: null,
         senderIdentityKey: aliceKP.publicKey,
         senderEphemeralKey: aliceResult.ephemeralPublicKey,
-        pqxdhPolicy: PqxdhPolicy.preferPq,
+        kyberKeyPair: kyberKP,
+        kyberCiphertext: aliceResult.kyberCiphertext!,
+        routing: aliceResult.routing,
       );
 
       expect(aliceResult.sharedSecret, equals(bobSharedSecret));
       expect(aliceResult.usedOneTimePreKeyId, isNull);
-      expect(aliceResult.kyberCiphertext, isNull);
+      expect(aliceResult.kyberCiphertext, isNotNull);
     });
 
     test('ephemeral public key is unique per invocation', () async {
@@ -148,21 +186,34 @@ void main() {
         recipientBundle: bundle,
       );
 
-      expect(result1.ephemeralPublicKey,
-          isNot(equals(result2.ephemeralPublicKey)));
+      expect(
+        result1.ephemeralPublicKey,
+        isNot(equals(result2.ephemeralPublicKey)),
+      );
     });
 
     test('rejects tampered signed pre-key signature', () async {
       final aliceKP = await SignalKeyHelper.generateX25519KeyPair();
       final identityKP = await SignalKeyHelper.generateX25519KeyPair();
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(1, signingKP);
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        1,
+        signingKP,
+      );
 
       // Use wrong signing key in the bundle — signature won't verify
       final wrongSigningKP = await SignalKeyHelper.generateSigningKeyPair();
+      final kyberKP = SignalKeyHelper.generateKyberKeyPair();
+      final kyberSignature = await SignalKeyHelper.sign(
+        wrongSigningKP.privateKey,
+        RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+          keyId: kyberKP.keyId!,
+          publicKey: kyberKP.publicKey,
+        ),
+      );
 
       final bundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'bob-123',
         deviceId: 'device-1',
         identityKey: identityKP.publicKey,
@@ -172,6 +223,15 @@ void main() {
           publicKey: signedPreKey.keyPair.publicKey,
           signature: signedPreKey
               .signature, // Signed by correct key, but bundle claims wrong
+        ),
+        kyberPreKey: KyberPreKeyPublic(
+          keyId: kyberKP.keyId!,
+          publicKey: kyberKP.publicKey,
+          signature: kyberSignature,
+          cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+          kemSuite: RisaalCryptoProtocol.kemSuite,
+          kemStandard: RisaalCryptoProtocol.kemStandard,
+          kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
         ),
       );
 

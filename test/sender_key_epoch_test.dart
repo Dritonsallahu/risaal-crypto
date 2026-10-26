@@ -18,56 +18,64 @@ Future<(SenderKeyManager manager, FakeSecureStorage storage)> _createManager(
 
 void main() {
   group('SenderKey epoch — types', () {
-    test('SenderKeyState exposes epoch defaulting to 0', () {
+    test('SenderKeyState requires an explicit current protocol and epoch', () {
       final state = SenderKeyState(
+        cryptoProtocolEpoch: 2,
         groupId: 'g',
         senderId: 's',
         iteration: 0,
+        epoch: 0,
         chainKey: List<int>.filled(32, 0),
         signingPublicKey: 'pub',
       );
       expect(state.epoch, 0);
     });
 
-    test('SenderKeyDistribution exposes epoch defaulting to 0', () {
-      const dist = SenderKeyDistribution(
-        groupId: 'g',
-        senderId: 's',
-        iteration: 0,
-        chainKey: 'AAAA',
-        signingKey: 'pub',
-      );
-      expect(dist.epoch, 0);
-    });
+    test(
+      'SenderKeyDistribution requires an explicit current protocol and epoch',
+      () {
+        const dist = SenderKeyDistribution(
+          cryptoProtocolEpoch: 2,
+          groupId: 'g',
+          senderId: 's',
+          iteration: 0,
+          epoch: 0,
+          chainKey: 'AAAA',
+          signingKey: 'pub',
+        );
+        expect(dist.epoch, 0);
+      },
+    );
 
     test('SenderKeyState JSON round-trip preserves epoch', () {
       final original = SenderKeyState(
+        cryptoProtocolEpoch: 2,
         groupId: 'g',
         senderId: 's',
         iteration: 5,
         epoch: 3,
         chainKey: List<int>.filled(32, 7),
-        signingPublicKey: 'pub',
+        signingPublicKey: base64Encode(List<int>.filled(32, 8)),
       );
       final restored = SenderKeyState.fromJson(original.toJson());
       expect(restored.epoch, 3);
     });
 
     test('SenderKeyDistribution JSON round-trip preserves epoch', () {
-      const original = SenderKeyDistribution(
+      final original = SenderKeyDistribution(
+        cryptoProtocolEpoch: 2,
         groupId: 'g',
         senderId: 's',
         iteration: 0,
         epoch: 2,
-        chainKey: 'AAAA',
-        signingKey: 'pub',
+        chainKey: base64Encode(List<int>.filled(32, 1)),
+        signingKey: base64Encode(List<int>.filled(32, 2)),
       );
       final restored = SenderKeyDistribution.fromJson(original.toJson());
       expect(restored.epoch, 2);
     });
 
-    test('SenderKeyState.fromJson without epoch defaults to 0 (legacy state)',
-        () {
+    test('SenderKeyState.fromJson rejects an unversioned legacy state', () {
       final json = {
         'groupId': 'g',
         'senderId': 's',
@@ -75,8 +83,10 @@ void main() {
         'chainKey': base64Encode(List<int>.filled(32, 0)),
         'signingPublicKey': 'pub',
       };
-      final state = SenderKeyState.fromJson(json);
-      expect(state.epoch, 0);
+      expect(
+        () => SenderKeyState.fromJson(json),
+        throwsA(isA<FormatException>()),
+      );
     });
   });
 
@@ -109,8 +119,7 @@ void main() {
   });
 
   group('SenderKey epoch — distribution acceptance', () {
-    test('processSenderKeyDistribution accepts equal or newer epoch',
-        () async {
+    test('processSenderKeyDistribution accepts equal or newer epoch', () async {
       final (alice, _) = await _createManager('alice');
       final (bob, _) = await _createManager('bob');
 
@@ -177,7 +186,8 @@ void main() {
       // v3 layout: [0x03, epoch(4 LE), nonce(12), ct(N), mac(16)]
       expect(blob[0], 0x03);
       // Epoch bytes 1..5 little-endian == 1
-      final epoch = blob[1] | (blob[2] << 8) | (blob[3] << 16) | (blob[4] << 24);
+      final epoch =
+          blob[1] | (blob[2] << 8) | (blob[3] << 16) | (blob[4] << 24);
       expect(epoch, 1);
     });
 
@@ -195,38 +205,36 @@ void main() {
       expect(utf8.decode(pt), 'synced');
     });
 
-    test('decrypt rejects message whose embedded epoch differs from stored',
-        () async {
-      final (alice, _) = await _createManager('alice');
-      final (bob, _) = await _createManager('bob');
+    test(
+      'decrypt rejects message whose embedded epoch differs from stored',
+      () async {
+        final (alice, _) = await _createManager('alice');
+        final (bob, _) = await _createManager('bob');
 
-      // Bob receives epoch 0 from alice, then alice rotates to epoch 1.
-      // Bob NEVER receives the epoch-1 SKDM (simulating a removed member).
-      final skdm0 = await alice.generateSenderKey('group');
-      await bob.processSenderKeyDistribution('group', 'alice', skdm0);
-      await alice.generateSenderKey('group'); // alice now at epoch=1
+        // Bob receives epoch 0 from alice, then alice rotates to epoch 1.
+        // Bob NEVER receives the epoch-1 SKDM (simulating a removed member).
+        final skdm0 = await alice.generateSenderKey('group');
+        await bob.processSenderKeyDistribution('group', 'alice', skdm0);
+        await alice.generateSenderKey('group'); // alice now at epoch=1
 
-      final msgEpoch1 = await alice.encrypt('group', utf8.encode('after'));
+        final msgEpoch1 = await alice.encrypt('group', utf8.encode('after'));
 
-      expect(
-        () => bob.decrypt('group', 'alice', msgEpoch1),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            anyOf(
-              contains('epoch'),
-              contains('Sender Key'),
+        expect(
+          () => bob.decrypt('group', 'alice', msgEpoch1),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              anyOf(contains('epoch'), contains('Sender Key')),
             ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   });
 
   group('SenderKey epoch — security property (headline)', () {
-    test(
-        'removed member cannot decrypt post-rotation messages '
+    test('removed member cannot decrypt post-rotation messages '
         '(forward secrecy on member removal)', () async {
       // Alice, Bob, Carol are in the group.
       final (alice, _) = await _createManager('alice');
@@ -239,12 +247,18 @@ void main() {
       await carol.processSenderKeyDistribution('group', 'alice', skdm0);
 
       // Pre-removal message: both can decrypt.
-      final pre =
-          await alice.encrypt('group', utf8.encode('hello pre-removal'));
-      expect(utf8.decode(await bob.decrypt('group', 'alice', pre)),
-          'hello pre-removal');
-      expect(utf8.decode(await carol.decrypt('group', 'alice', pre)),
-          'hello pre-removal');
+      final pre = await alice.encrypt(
+        'group',
+        utf8.encode('hello pre-removal'),
+      );
+      expect(
+        utf8.decode(await bob.decrypt('group', 'alice', pre)),
+        'hello pre-removal',
+      );
+      expect(
+        utf8.decode(await carol.decrypt('group', 'alice', pre)),
+        'hello pre-removal',
+      );
 
       // Carol is removed → Alice rotates her sender key. ONLY Bob receives
       // the new SKDM (the server stops delivering to Carol).
@@ -254,12 +268,16 @@ void main() {
       // Carol's state is still pinned at epoch=0.
 
       // Alice sends a new message at epoch=1.
-      final post =
-          await alice.encrypt('group', utf8.encode('hello post-removal'));
+      final post = await alice.encrypt(
+        'group',
+        utf8.encode('hello post-removal'),
+      );
 
       // Bob decrypts.
-      expect(utf8.decode(await bob.decrypt('group', 'alice', post)),
-          'hello post-removal');
+      expect(
+        utf8.decode(await bob.decrypt('group', 'alice', post)),
+        'hello post-removal',
+      );
 
       // Carol — even retaining her old chainKey — cannot decrypt.
       expect(
@@ -268,31 +286,36 @@ void main() {
       );
     });
 
-    test('continued rotation: 3 epochs, removed member stays at epoch 0',
-        () async {
-      final (alice, _) = await _createManager('alice');
-      final (bob, _) = await _createManager('bob');
-      final (eve, _) = await _createManager('eve');
+    test(
+      'continued rotation: 3 epochs, removed member stays at epoch 0',
+      () async {
+        final (alice, _) = await _createManager('alice');
+        final (bob, _) = await _createManager('bob');
+        final (eve, _) = await _createManager('eve');
 
-      final skdm0 = await alice.generateSenderKey('group');
-      await bob.processSenderKeyDistribution('group', 'alice', skdm0);
-      await eve.processSenderKeyDistribution('group', 'alice', skdm0);
+        final skdm0 = await alice.generateSenderKey('group');
+        await bob.processSenderKeyDistribution('group', 'alice', skdm0);
+        await eve.processSenderKeyDistribution('group', 'alice', skdm0);
 
-      // Eve removed.
-      final skdm1 = await alice.generateSenderKey('group');
-      await bob.processSenderKeyDistribution('group', 'alice', skdm1);
+        // Eve removed.
+        final skdm1 = await alice.generateSenderKey('group');
+        await bob.processSenderKeyDistribution('group', 'alice', skdm1);
 
-      // Another rotation (e.g. another member removed).
-      final skdm2 = await alice.generateSenderKey('group');
-      await bob.processSenderKeyDistribution('group', 'alice', skdm2);
+        // Another rotation (e.g. another member removed).
+        final skdm2 = await alice.generateSenderKey('group');
+        await bob.processSenderKeyDistribution('group', 'alice', skdm2);
 
-      final msg = await alice.encrypt('group', utf8.encode('current'));
+        final msg = await alice.encrypt('group', utf8.encode('current'));
 
-      expect(utf8.decode(await bob.decrypt('group', 'alice', msg)), 'current');
-      expect(
-        () => eve.decrypt('group', 'alice', msg),
-        throwsA(isA<StateError>()),
-      );
-    });
+        expect(
+          utf8.decode(await bob.decrypt('group', 'alice', msg)),
+          'current',
+        );
+        expect(
+          () => eve.decrypt('group', 'alice', msg),
+          throwsA(isA<StateError>()),
+        );
+      },
+    );
   });
 }

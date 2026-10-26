@@ -1,12 +1,25 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:risaal_crypto/src/crypto_protocol.dart';
 import 'package:risaal_crypto/src/crypto_storage.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/models/session_state.dart';
 import 'package:risaal_crypto/src/double_ratchet.dart';
 import 'helpers/fake_secure_storage.dart';
+
+const _testPendingRouting = PreKeyHandshakeRouting(
+  opkRoute: OpkGenerationRouting(
+    bundleRevision: 1,
+    opkGeneration: 1,
+    opkSetDigest:
+        '0000000000000000000000000000000000000000000000000000000000000000',
+  ),
+  recipientSignedPreKeyId: 1,
+  usedOneTimePreKeyId: 42,
+  kemMetadata: MlKemEnvelopeMetadata.current(recipientKeyId: 7),
+);
 
 void main() {
   late FakeSecureStorage fakeStorage;
@@ -181,6 +194,11 @@ void main() {
       final kyberPair = KyberKeyPair(
         publicKey: 'kyber-public-base64',
         privateKey: 'kyber-private-base64',
+        keyId: 7,
+        cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+        kemSuite: RisaalCryptoProtocol.kemSuite,
+        kemStandard: RisaalCryptoProtocol.kemStandard,
+        kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
       );
 
       await cryptoStorage.saveKyberKeyPair(kyberPair);
@@ -189,6 +207,8 @@ void main() {
       expect(loaded, isNotNull);
       expect(loaded!.publicKey, 'kyber-public-base64');
       expect(loaded.privateKey, 'kyber-private-base64');
+      expect(loaded.keyId, 7);
+      expect(loaded.isCurrentProtocol, isTrue);
     });
 
     test('getKyberKeyPair returns null when not saved', () async {
@@ -212,21 +232,23 @@ void main() {
       expect(loaded.receivingChainKey, state.receivingChainKey);
     });
 
-    test('Different (recipientId, deviceId) pairs stored independently',
-        () async {
-      final state1 = await createTestRatchetState();
-      final state2 = await createTestRatchetState();
+    test(
+      'Different (recipientId, deviceId) pairs stored independently',
+      () async {
+        final state1 = await createTestRatchetState();
+        final state2 = await createTestRatchetState();
 
-      await cryptoStorage.saveSession('user1', 'device1', state1);
-      await cryptoStorage.saveSession('user2', 'device2', state2);
+        await cryptoStorage.saveSession('user1', 'device1', state1);
+        await cryptoStorage.saveSession('user2', 'device2', state2);
 
-      final loaded1 = await cryptoStorage.getSession('user1', 'device1');
-      final loaded2 = await cryptoStorage.getSession('user2', 'device2');
+        final loaded1 = await cryptoStorage.getSession('user1', 'device1');
+        final loaded2 = await cryptoStorage.getSession('user2', 'device2');
 
-      expect(loaded1!.rootKey, state1.rootKey);
-      expect(loaded2!.rootKey, state2.rootKey);
-      expect(loaded1.rootKey, isNot(loaded2.rootKey));
-    });
+        expect(loaded1!.rootKey, state1.rootKey);
+        expect(loaded2!.rootKey, state2.rootKey);
+        expect(loaded1.rootKey, isNot(loaded2.rootKey));
+      },
+    );
 
     test('deleteSession removes specific session', () async {
       final state = await createTestRatchetState();
@@ -284,7 +306,7 @@ void main() {
 
       // Verify by reading raw storage
       final devices = await fakeStorage.read(
-        key: 'crypto_session_devices_user123',
+        key: 'crypto_e2_session_devices_user123',
       );
       expect(devices, contains('device1'));
       expect(devices, contains('device2'));
@@ -295,58 +317,155 @@ void main() {
       await cryptoStorage.trackSessionDevice('user123', 'device1');
 
       final devices = await fakeStorage.read(
-        key: 'crypto_session_devices_user123',
+        key: 'crypto_e2_session_devices_user123',
       );
       expect(devices, 'device1');
     });
 
-    test('deleteAllSessionsForUser removes all tracked sessions and keys',
-        () async {
-      final state1 = await createTestRatchetState();
-      final state2 = await createTestRatchetState();
+    test(
+      'deleteAllSessionsForUser removes all tracked sessions and keys',
+      () async {
+        final state1 = await createTestRatchetState();
+        final state2 = await createTestRatchetState();
 
-      // Create sessions for two devices
+        // Create sessions for two devices
+        await cryptoStorage.trackSessionDevice('user123', 'device1');
+        await cryptoStorage.trackSessionDevice('user123', 'device2');
+        await cryptoStorage.saveSession('user123', 'device1', state1);
+        await cryptoStorage.saveSession('user123', 'device2', state2);
+        await cryptoStorage.saveSessionIdentityKey('user123', 'device1', 'ik1');
+        await cryptoStorage.saveSessionIdentityKey('user123', 'device2', 'ik2');
+        await cryptoStorage.savePendingPreKeyInfo(
+          'user123',
+          'device1',
+          'ephemeral1',
+          kyberCiphertext: 'kyber-ct-base64',
+          routing: _testPendingRouting,
+        );
+
+        // Delete all
+        await cryptoStorage.deleteAllSessionsForUser('user123');
+
+        // Verify all are gone
+        // Sessions and pending handshake state are disposable and go.
+        expect(await cryptoStorage.getSession('user123', 'device1'), isNull);
+        expect(await cryptoStorage.getSession('user123', 'device2'), isNull);
+        expect(
+          await cryptoStorage.getPendingPreKeyInfo('user123', 'device1'),
+          isNull,
+        );
+
+        // Identity pins and the device list MUST survive. This test previously
+        // asserted the opposite, and that behaviour was the bypass: an attacker
+        // who could get sessions dropped — a forged `conversation:closed` frame
+        // was enough — also erased the pins, after which an impostor's PreKey
+        // envelope passed every inbound guard because there was nothing left to
+        // compare it against. A pin is a trust anchor, not session state.
+        expect(
+          await cryptoStorage.getSessionIdentityKey('user123', 'device1'),
+          'ik1',
+        );
+        expect(
+          await cryptoStorage.getSessionIdentityKey('user123', 'device2'),
+          'ik2',
+        );
+        expect(
+          await fakeStorage.read(key: 'crypto_e2_session_devices_user123'),
+          isNotNull,
+          reason: 'the device list lets a later handshake find a sibling pin',
+        );
+      },
+    );
+
+    test('forgetPeerIdentity is the only thing that clears a pin', () async {
       await cryptoStorage.trackSessionDevice('user123', 'device1');
-      await cryptoStorage.trackSessionDevice('user123', 'device2');
-      await cryptoStorage.saveSession('user123', 'device1', state1);
-      await cryptoStorage.saveSession('user123', 'device2', state2);
-      await cryptoStorage.saveSessionIdentityKey(
+      await cryptoStorage.saveSession(
         'user123',
         'device1',
-        'ik1',
+        await createTestRatchetState(),
       );
-      await cryptoStorage.saveSessionIdentityKey(
-        'user123',
-        'device2',
-        'ik2',
-      );
-      await cryptoStorage.savePendingPreKeyInfo(
-        'user123',
-        'device1',
-        'ephemeral1',
-        42,
-      );
+      await cryptoStorage.saveSessionIdentityKey('user123', 'device1', 'ik1');
 
-      // Delete all
-      await cryptoStorage.deleteAllSessionsForUser('user123');
+      await cryptoStorage.forgetPeerIdentity('user123');
 
-      // Verify all are gone
       expect(await cryptoStorage.getSession('user123', 'device1'), isNull);
-      expect(await cryptoStorage.getSession('user123', 'device2'), isNull);
       expect(
         await cryptoStorage.getSessionIdentityKey('user123', 'device1'),
         isNull,
       );
       expect(
-        await cryptoStorage.getSessionIdentityKey('user123', 'device2'),
+        await fakeStorage.read(key: 'crypto_e2_session_devices_user123'),
         isNull,
       );
+    });
+  });
+
+  group('CryptoStorage peer signing-key pins (R4-C3)', () {
+    test('save/get/delete round-trip under a validated key', () async {
+      expect(await cryptoStorage.getPeerSigningKey('user123', 'dev-1'), isNull);
+      await cryptoStorage.savePeerSigningKey('user123', 'dev-1', 'sig-1');
       expect(
-        await cryptoStorage.getPendingPreKeyInfo('user123', 'device1'),
-        isNull,
+        await cryptoStorage.getPeerSigningKey('user123', 'dev-1'),
+        'sig-1',
       );
       expect(
-        await fakeStorage.read(key: 'crypto_session_devices_user123'),
+        await fakeStorage.read(key: 'crypto_e2_peer_signing_user123_dev-1'),
+        'sig-1',
+      );
+      await cryptoStorage.deletePeerSigningKey('user123', 'dev-1');
+      expect(await cryptoStorage.getPeerSigningKey('user123', 'dev-1'), isNull);
+    });
+
+    test('reserved words and unsafe identifiers are rejected', () async {
+      for (final (user, device) in <(String, String)>[
+        ('ik', 'dev-1'),
+        ('user123', 'devices'),
+        ('user_123', 'dev-1'),
+        ('user123', ''),
+      ]) {
+        expect(
+          () => cryptoStorage.savePeerSigningKey(user, device, 'sig'),
+          throwsFormatException,
+        );
+        expect(
+          () => cryptoStorage.getPeerSigningKey(user, device),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test(
+      'forgetPeerIdentity deletes it together with the identity pin',
+      () async {
+        await cryptoStorage.trackSessionDevice('user123', 'device1');
+        await cryptoStorage.saveSessionIdentityKey('user123', 'device1', 'ik1');
+        await cryptoStorage.savePeerSigningKey('user123', 'device1', 'sig1');
+
+        await cryptoStorage.forgetPeerIdentity('user123');
+
+        expect(
+          await cryptoStorage.getSessionIdentityKey('user123', 'device1'),
+          isNull,
+        );
+        expect(
+          await cryptoStorage.getPeerSigningKey('user123', 'device1'),
+          isNull,
+        );
+      },
+    );
+
+    test('wipeForFreshRegistration and wipeAll remove it', () async {
+      await cryptoStorage.savePeerSigningKey('user123', 'device1', 'sig1');
+      await cryptoStorage.wipeForFreshRegistration();
+      expect(
+        await cryptoStorage.getPeerSigningKey('user123', 'device1'),
+        isNull,
+      );
+
+      await cryptoStorage.savePeerSigningKey('user123', 'device1', 'sig1');
+      await cryptoStorage.wipeAll();
+      expect(
+        await cryptoStorage.getPeerSigningKey('user123', 'device1'),
         isNull,
       );
     });
@@ -358,7 +477,8 @@ void main() {
         'user123',
         'device456',
         'ephemeral-pub-key',
-        42,
+        kyberCiphertext: 'kyber-ct-base64',
+        routing: _testPendingRouting,
       );
 
       final loaded = await cryptoStorage.getPendingPreKeyInfo(
@@ -369,32 +489,45 @@ void main() {
       expect(loaded, isNotNull);
       expect(loaded!['ephemeralPublicKey'], 'ephemeral-pub-key');
       expect(loaded['usedOneTimePreKeyId'], 42);
-      expect(loaded.containsKey('kyberCiphertext'), false);
+      expect(loaded['kyberCiphertext'], 'kyber-ct-base64');
+      expect(loaded['bundleRevision'], 1);
+      expect(loaded['opkGeneration'], 1);
+      expect(loaded['recipientSignedPreKeyId'], 1);
+      expect(loaded['recipientKeyId'], 7);
     });
 
-    test('Optional kyberCiphertext included when provided', () async {
-      await cryptoStorage.savePendingPreKeyInfo(
-        'user123',
-        'device456',
-        'ephemeral-pub-key',
-        42,
-        kyberCiphertext: 'kyber-ct-base64',
-      );
+    test(
+      'Required ML-KEM ciphertext and route are persisted together',
+      () async {
+        await cryptoStorage.savePendingPreKeyInfo(
+          'user123',
+          'device456',
+          'ephemeral-pub-key',
+          kyberCiphertext: 'kyber-ct-base64',
+          routing: _testPendingRouting,
+        );
 
-      final loaded = await cryptoStorage.getPendingPreKeyInfo(
-        'user123',
-        'device456',
-      );
+        final loaded = await cryptoStorage.getPendingPreKeyInfo(
+          'user123',
+          'device456',
+        );
 
-      expect(loaded!['kyberCiphertext'], 'kyber-ct-base64');
-    });
+        expect(loaded!['kyberCiphertext'], 'kyber-ct-base64');
+        expect(loaded['recipientKeyId'], 7);
+        expect(
+          loaded['cryptoProtocolEpoch'],
+          RisaalCryptoProtocol.cryptoProtocolEpoch,
+        );
+      },
+    );
 
     test('clearPendingPreKeyInfo removes it', () async {
       await cryptoStorage.savePendingPreKeyInfo(
         'user123',
         'device456',
         'ephemeral-pub-key',
-        42,
+        kyberCiphertext: 'kyber-ct-base64',
+        routing: _testPendingRouting,
       );
 
       await cryptoStorage.clearPendingPreKeyInfo('user123', 'device456');
@@ -408,10 +541,13 @@ void main() {
   });
 
   group('CryptoStorage pre-key counter', () {
-    test('getNextPreKeyId returns 0 by default', () async {
-      final id = await cryptoStorage.getNextPreKeyId();
-      expect(id, 0);
-    });
+    test(
+      'getNextPreKeyId returns the first valid positive id by default',
+      () async {
+        final id = await cryptoStorage.getNextPreKeyId();
+        expect(id, 1);
+      },
+    );
 
     test('setNextPreKeyId persists value', () async {
       await cryptoStorage.setNextPreKeyId(999);
@@ -422,10 +558,7 @@ void main() {
 
   group('CryptoStorage sender keys', () {
     test('Save and load sender key state round-trip', () async {
-      final stateJson = {
-        'chainKey': 'chain-key-base64',
-        'messageNumber': 5,
-      };
+      final stateJson = {'chainKey': 'chain-key-base64', 'messageNumber': 5};
 
       await cryptoStorage.saveSenderKeyRaw('group123', 'sender456', stateJson);
       final loaded = await cryptoStorage.getSenderKeyRaw(
@@ -460,10 +593,11 @@ void main() {
       await cryptoStorage.saveSenderKeyRaw('group123', 'member2', state2);
       await cryptoStorage.saveSenderKeyRaw('group123', 'member3', state3);
 
-      await cryptoStorage.deleteSenderKeysForGroup(
-        'group123',
-        ['member1', 'member2', 'member3'],
-      );
+      await cryptoStorage.deleteSenderKeysForGroup('group123', [
+        'member1',
+        'member2',
+        'member3',
+      ]);
 
       expect(
         await cryptoStorage.getSenderKeyRaw('group123', 'member1'),
@@ -552,22 +686,15 @@ void main() {
       await cryptoStorage.saveIdentityKeyPair(identityKP);
       await cryptoStorage.saveSigningKeyPair(signingKP);
       await cryptoStorage.saveSession('user123', 'device456', state);
-      await cryptoStorage.saveSessionIdentityKey(
-        'user123',
-        'device456',
-        'ik',
-      );
+      await cryptoStorage.saveSessionIdentityKey('user123', 'device456', 'ik');
       await cryptoStorage.setNextPreKeyId(100);
-      await cryptoStorage.saveSenderKeyRaw(
-        'group1',
-        'sender1',
-        {'key': 'value'},
-      );
-      await cryptoStorage.saveResetTimestamps(
-        'user123',
-        'device456',
-        [1000, 2000],
-      );
+      await cryptoStorage.saveSenderKeyRaw('group1', 'sender1', {
+        'key': 'value',
+      });
+      await cryptoStorage.saveResetTimestamps('user123', 'device456', [
+        1000,
+        2000,
+      ]);
 
       // Wipe all
       await cryptoStorage.wipeAll();
@@ -580,11 +707,8 @@ void main() {
         await cryptoStorage.getSessionIdentityKey('user123', 'device456'),
         isNull,
       );
-      expect(await cryptoStorage.getNextPreKeyId(), 0);
-      expect(
-        await cryptoStorage.getSenderKeyRaw('group1', 'sender1'),
-        isNull,
-      );
+      expect(await cryptoStorage.getNextPreKeyId(), 1);
+      expect(await cryptoStorage.getSenderKeyRaw('group1', 'sender1'), isNull);
       expect(
         await cryptoStorage.loadResetTimestamps('user123', 'device456'),
         isEmpty,
@@ -601,8 +725,7 @@ void main() {
         1,
         signingKP,
       );
-      final oneTimeKeys =
-          await SignalKeyHelper.generateOneTimePreKeys(0, 5);
+      final oneTimeKeys = await SignalKeyHelper.generateOneTimePreKeys(0, 5);
 
       await cryptoStorage.saveIdentityKeyPair(identityKP);
       await cryptoStorage.saveSigningKeyPair(signingKP);
@@ -619,30 +742,42 @@ void main() {
       expect(await cryptoStorage.getSignedPreKey(), isNull);
       expect(await cryptoStorage.getSignedPreKeyCreatedAt(), isNull);
       expect(await cryptoStorage.getOneTimePreKeys(), isEmpty);
-      expect(await cryptoStorage.getNextPreKeyId(), 0);
+      expect(await cryptoStorage.getNextPreKeyId(), 1);
       expect(await cryptoStorage.loadSeenNonces(), isEmpty);
     });
 
-    test('Leaves per-recipient session state untouched', () async {
-      // Per-session state is not enumerable through CryptoSecureStorage,
-      // so the wipe deliberately leaves it in place. Document and lock
-      // that behaviour with a test so future changes are intentional.
-      final state = await createTestRatchetState();
-      await cryptoStorage.saveSession('peer-1', 'device-1', state);
+    test(
+      'Removes dynamic account crypto state and preserves non-crypto data',
+      () async {
+        final state = await createTestRatchetState();
+        await cryptoStorage.saveSession('peer-1', 'device-1', state);
+        await cryptoStorage.saveSessionIdentityKey(
+          'peer-1',
+          'device-1',
+          'identity-key',
+        );
+        await cryptoStorage.saveSenderKeyRaw('group-1', 'sender-1', {
+          'key': 'value',
+        });
 
-      // Also seed a singleton so we know the wipe ran.
-      final identityKP = await SignalKeyHelper.generateX25519KeyPair();
-      await cryptoStorage.saveIdentityKeyPair(identityKP);
+        final identityKP = await SignalKeyHelper.generateX25519KeyPair();
+        await cryptoStorage.saveIdentityKeyPair(identityKP);
+        await fakeStorage.write(key: 'device_id', value: 'preserve-device');
 
-      await cryptoStorage.wipeForFreshRegistration();
+        await cryptoStorage.wipeForFreshRegistration();
 
-      expect(await cryptoStorage.getIdentityKeyPair(), isNull);
-      expect(
-        await cryptoStorage.getSession('peer-1', 'device-1'),
-        isNotNull,
-        reason:
-            'Per-recipient sessions are intentionally orphaned, not wiped.',
-      );
-    });
+        expect(await cryptoStorage.getIdentityKeyPair(), isNull);
+        expect(await cryptoStorage.getSession('peer-1', 'device-1'), isNull);
+        expect(
+          await cryptoStorage.getSessionIdentityKey('peer-1', 'device-1'),
+          isNull,
+        );
+        expect(
+          await cryptoStorage.getSenderKeyRaw('group-1', 'sender-1'),
+          isNull,
+        );
+        expect(await fakeStorage.read(key: 'device_id'), 'preserve-device');
+      },
+    );
   });
 }

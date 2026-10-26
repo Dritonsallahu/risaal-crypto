@@ -1,49 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:risaal_crypto/src/models/signal_keys.dart';
+import 'package:risaal_crypto/src/crypto_protocol.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 
 import 'helpers/crypto_test_fixtures.dart';
 import 'helpers/fake_secure_storage.dart';
-
-/// Build a [PreKeyBundle] from the map returned by [generateKeyBundle()].
-PreKeyBundle _bundleFromMap(
-  Map<String, dynamic> bundle, {
-  required String userId,
-  required String deviceId,
-}) {
-  final signedPreKey = bundle['signedPreKey'] as Map<String, dynamic>;
-  final oneTimePreKeys = bundle['oneTimePreKeys'] as List<dynamic>;
-
-  return PreKeyBundle(
-    userId: userId,
-    deviceId: deviceId,
-    identityKey: bundle['identityKey'] as String,
-    identitySigningKey: bundle['identitySigningKey'] as String,
-    signedPreKey: SignedPreKeyPublic(
-      keyId: signedPreKey['keyId'] as int,
-      publicKey: signedPreKey['publicKey'] as String,
-      signature: signedPreKey['signature'] as String,
-    ),
-    oneTimePreKey: oneTimePreKeys.isNotEmpty
-        ? OneTimePreKeyPublic(
-            keyId:
-                (oneTimePreKeys.first as Map<String, dynamic>)['keyId'] as int,
-            publicKey: (oneTimePreKeys.first
-                as Map<String, dynamic>)['publicKey'] as String,
-          )
-        : null,
-    kyberPreKey: bundle.containsKey('kyberPreKey')
-        ? KyberPreKeyPublic(
-            keyId:
-                (bundle['kyberPreKey'] as Map<String, dynamic>)['keyId'] as int,
-            publicKey: (bundle['kyberPreKey']
-                as Map<String, dynamic>)['publicKey'] as String,
-          )
-        : null,
-  );
-}
 
 /// Establish a full bidirectional session between Alice and Bob.
 ///
@@ -52,16 +14,20 @@ PreKeyBundle _bundleFromMap(
 /// 2. Alice encrypts a prekey message.
 /// 3. Bob decrypts it (X3DH responder) -- this establishes Bob's session.
 Future<
-    ({
-      SignalProtocolManager alice,
-      FakeSecureStorage aliceStorage,
-      SignalProtocolManager bob,
-      FakeSecureStorage bobStorage,
-    })> _createFullSession() async {
+  ({
+    SignalProtocolManager alice,
+    FakeSecureStorage aliceStorage,
+    SignalProtocolManager bob,
+    FakeSecureStorage bobStorage,
+  })
+>
+_createFullSession() async {
   final aliceStorage = FakeSecureStorage();
   final bobStorage = FakeSecureStorage();
   final alice = SignalProtocolManager(secureStorage: aliceStorage);
   final bob = SignalProtocolManager(secureStorage: bobStorage);
+  await alice.wipeForFreshRegistration();
+  await bob.wipeForFreshRegistration();
   await alice.initialize();
   await bob.initialize();
 
@@ -71,14 +37,19 @@ Future<
   await bobStorage.write(key: 'device_id', value: 'bob-device');
 
   // Alice creates session from Bob's key bundle
-  final bobBundle = await bob.generateKeyBundle();
-  final bundle =
-      _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
+  final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(bob);
+  final bundle = acceptedBob.consumerBundle(
+    userId: 'bob-id',
+    deviceId: 'bob-device',
+  );
   await alice.createSession(bundle);
 
   // Alice sends first message (prekey) to establish Bob's side
-  final preKeyEnvelope =
-      await alice.encryptMessage('bob-id', 'bob-device', 'session-init');
+  final preKeyEnvelope = await alice.encryptMessage(
+    'bob-id',
+    'bob-device',
+    'session-init',
+  );
   await bob.decryptMessage('alice-id', 'alice-device', preKeyEnvelope);
 
   return (
@@ -93,87 +64,97 @@ void main() {
   // ── Initialization ──────────────────────────────────────────────────
 
   group('SignalProtocolManager initialization', () {
-    test('initialize() generates all keys and returns true on first run',
-        () async {
-      final storage = FakeSecureStorage();
-      final manager = SignalProtocolManager(secureStorage: storage);
+    test(
+      'initialize() generates all keys and returns true on first run',
+      () async {
+        final storage = FakeSecureStorage();
+        final manager = SignalProtocolManager(secureStorage: storage);
 
-      final isNew = await manager.initialize();
+        await manager.wipeForFreshRegistration();
+        final isNew = await manager.initialize();
 
-      expect(isNew, isTrue);
-      // Identity key pair should now be persisted
-      final identityRaw = await storage.read(key: 'crypto_identity_key_pair');
-      expect(identityRaw, isNotNull);
-      expect(identityRaw, isNotEmpty);
-    });
+        expect(isNew, isTrue);
+        // Identity key pair should now be persisted
+        final identityRaw = await storage.read(key: 'crypto_identity_key_pair');
+        expect(identityRaw, isNotNull);
+        expect(identityRaw, isNotEmpty);
+      },
+    );
 
-    test('initialize() returns false on subsequent calls (keys already exist)',
-        () async {
-      final storage = FakeSecureStorage();
-      final manager = SignalProtocolManager(secureStorage: storage);
+    test(
+      'initialize() returns false after the exact bundle is acknowledged',
+      () async {
+        final storage = FakeSecureStorage();
+        final manager = SignalProtocolManager(secureStorage: storage);
 
-      final first = await manager.initialize();
-      final second = await manager.initialize();
+        await manager.wipeForFreshRegistration();
+        final first = await manager.initialize();
+        await CryptoTestFixtures.acceptInitialGeneration(manager);
+        final second = await manager.initialize();
 
-      expect(first, isTrue);
-      expect(second, isFalse);
-    });
+        expect(first, isTrue);
+        expect(second, isFalse);
+      },
+    );
 
-    test('After initialize, getIdentityPublicKey() returns non-empty base64',
-        () async {
-      final storage = FakeSecureStorage();
-      final manager = SignalProtocolManager(secureStorage: storage);
-      await manager.initialize();
+    test(
+      'After initialize, getIdentityPublicKey() returns non-empty base64',
+      () async {
+        final storage = FakeSecureStorage();
+        final manager = SignalProtocolManager(secureStorage: storage);
+        await manager.wipeForFreshRegistration();
+        await manager.initialize();
 
-      final pubKey = await manager.getIdentityPublicKey();
+        final pubKey = await manager.getIdentityPublicKey();
 
-      expect(pubKey, isNotEmpty);
-      // Should be valid base64 that decodes to 32 bytes (X25519 public key)
-      final bytes = base64Decode(pubKey);
-      expect(bytes.length, 32);
-    });
+        expect(pubKey, isNotEmpty);
+        // Should be valid base64 that decodes to 32 bytes (X25519 public key)
+        final bytes = base64Decode(pubKey);
+        expect(bytes.length, 32);
+      },
+    );
   });
 
   // ── Key Bundle ──────────────────────────────────────────────────────
 
   group('SignalProtocolManager key bundle', () {
     test(
-        'generateKeyBundle() includes identityKey, signedPreKey, oneTimePreKeys',
-        () async {
+      'initial journal dispatch includes identity, signed pre-key and OPKs',
+      () async {
+        final (manager, _) =
+            await CryptoTestFixtures.createInitializedManager();
+
+        final accepted = await CryptoTestFixtures.acceptInitialGeneration(
+          manager,
+        );
+        final bundle = accepted.publicMaterial;
+
+        expect(bundle, containsPair('identityKey', isA<String>()));
+        expect(bundle['identityKey'], isNotEmpty);
+
+        expect(bundle, contains('signedPreKey'));
+        final signedPreKey = bundle['signedPreKey'] as Map<String, dynamic>;
+        expect(signedPreKey, containsPair('keyId', isA<int>()));
+        expect(signedPreKey, containsPair('publicKey', isA<String>()));
+        expect(signedPreKey, containsPair('signature', isA<String>()));
+
+        expect(bundle, contains('oneTimePreKeys'));
+        final otps = bundle['oneTimePreKeys'] as List<dynamic>;
+        expect(otps, isNotEmpty);
+        final firstOtp = otps.first as Map<String, dynamic>;
+        expect(firstOtp, containsPair('keyId', isA<int>()));
+        expect(firstOtp, containsPair('publicKey', isA<String>()));
+      },
+    );
+
+    test('initial journal generation enforces the server OPK cap', () async {
       final (manager, _) = await CryptoTestFixtures.createInitializedManager();
 
-      final bundle = await manager.generateKeyBundle();
-
-      expect(bundle, containsPair('identityKey', isA<String>()));
-      expect(bundle['identityKey'], isNotEmpty);
-
-      expect(bundle, contains('signedPreKey'));
-      final signedPreKey = bundle['signedPreKey'] as Map<String, dynamic>;
-      expect(signedPreKey, containsPair('keyId', isA<int>()));
-      expect(signedPreKey, containsPair('publicKey', isA<String>()));
-      expect(signedPreKey, containsPair('signature', isA<String>()));
-
-      expect(bundle, contains('oneTimePreKeys'));
-      final otps = bundle['oneTimePreKeys'] as List<dynamic>;
-      expect(otps, isNotEmpty);
-      final firstOtp = otps.first as Map<String, dynamic>;
-      expect(firstOtp, containsPair('keyId', isA<int>()));
-      expect(firstOtp, containsPair('publicKey', isA<String>()));
-    });
-
-    test(
-        'generateKeyBundle() caps oneTimePreKeys at maxOneTimePreKeysPerBundle',
-        () async {
-      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
-
-      // Push storage well past the cap by replenishing repeatedly.
-      // initialize() seeded 20; each call adds the requested batch.
-      // 20 + 50 + 50 + 50 = 170 keys in storage > 100 cap.
-      await manager.generateOneTimePreKeys(50);
-      await manager.generateOneTimePreKeys(50);
-      await manager.generateOneTimePreKeys(50);
-
-      final bundle = await manager.generateKeyBundle();
+      final accepted = await CryptoTestFixtures.acceptInitialGeneration(
+        manager,
+        oneTimePreKeyCount: SignalProtocolManager.maxOneTimePreKeysPerBundle,
+      );
+      final bundle = accepted.publicMaterial;
       final otps = bundle['oneTimePreKeys'] as List<dynamic>;
 
       expect(
@@ -185,37 +166,67 @@ void main() {
     });
 
     test(
-        'wipeForFreshRegistration() lets initialize() generate a fresh 20-key bundle',
-        () async {
-      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
+      'fresh epoch-2 bundle never exposes reserved one-time key id zero',
+      () async {
+        final (manager, _) =
+            await CryptoTestFixtures.createInitializedManager();
 
-      // Simulate accumulated state from a long-lived prior account.
-      await manager.generateOneTimePreKeys(150);
-      final priorBundle = await manager.generateKeyBundle();
-      final priorIdentity = priorBundle['identityKey'] as String;
+        final accepted = await CryptoTestFixtures.acceptInitialGeneration(
+          manager,
+          oneTimePreKeyCount: 20,
+        );
+        final bundle = accepted.publicMaterial;
+        final oneTimePreKeys = bundle['oneTimePreKeys'] as List<dynamic>;
+        final ids = oneTimePreKeys
+            .map((entry) => (entry as Map<String, dynamic>)['keyId'] as int)
+            .toList();
 
-      await manager.wipeForFreshRegistration();
-      final isFreshInstall = await manager.initialize();
-      expect(isFreshInstall, isTrue);
+        expect(ids, isNotEmpty);
+        expect(ids.first, greaterThan(0));
+        expect(ids.every((id) => id > 0), isTrue);
+      },
+    );
 
-      final freshBundle = await manager.generateKeyBundle();
-      final freshOtps = freshBundle['oneTimePreKeys'] as List<dynamic>;
+    test(
+      'wipeForFreshRegistration authorizes a distinct fresh journal generation',
+      () async {
+        final (manager, _) =
+            await CryptoTestFixtures.createInitializedManager();
 
-      expect(freshOtps, hasLength(20));
-      expect(
-        freshBundle['identityKey'],
-        isNot(equals(priorIdentity)),
-        reason: 'A new identity must be generated after a wipe.',
-      );
-    });
+        final prior = await CryptoTestFixtures.acceptInitialGeneration(
+          manager,
+          oneTimePreKeyCount: 20,
+        );
+        final priorBundle = prior.publicMaterial;
+        final priorIdentity = priorBundle['identityKey'] as String;
 
-    test('generateKeyBundle() throws if not initialized', () async {
+        await manager.wipeForFreshRegistration();
+        final isFreshInstall = await manager.initialize();
+        expect(isFreshInstall, isTrue);
+
+        final fresh = await CryptoTestFixtures.acceptInitialGeneration(
+          manager,
+          oneTimePreKeyCount: 20,
+        );
+        final freshBundle = fresh.publicMaterial;
+        final freshOtps = freshBundle['oneTimePreKeys'] as List<dynamic>;
+
+        expect(freshOtps, hasLength(20));
+        expect(
+          freshBundle['identityKey'],
+          isNot(equals(priorIdentity)),
+          reason: 'A new identity must be generated after a wipe.',
+        );
+      },
+    );
+
+    test('legacy generateKeyBundle API always fails closed', () async {
       final storage = FakeSecureStorage();
       final manager = SignalProtocolManager(secureStorage: storage);
 
       expect(
         () => manager.generateKeyBundle(),
-        throwsA(isA<StateError>()),
+        throwsA(isA<UnsupportedError>()),
       );
     });
   });
@@ -228,12 +239,16 @@ void main() {
       final bobStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
 
-      final bobBundle = await bob.generateKeyBundle();
-      final bundle =
-          _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
+      final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(bob);
+      final bundle = acceptedBob.consumerBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
 
       // Should not throw
       await alice.createSession(bundle);
@@ -248,15 +263,19 @@ void main() {
       final bobStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
 
       // Before session creation
       expect(await alice.hasSession('bob-id', 'bob-device'), isFalse);
 
-      final bobBundle = await bob.generateKeyBundle();
-      final bundle =
-          _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
+      final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(bob);
+      final bundle = acceptedBob.consumerBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
       await alice.createSession(bundle);
 
       // After session creation
@@ -268,16 +287,23 @@ void main() {
       final bobStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
 
-      final bobBundle = await bob.generateKeyBundle();
-      final bundle =
-          _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
+      final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(bob);
+      final bundle = acceptedBob.consumerBundle(
+        userId: 'bob-id',
+        deviceId: 'bob-device',
+      );
       await alice.createSession(bundle);
 
-      final envelope =
-          await alice.encryptMessage('bob-id', 'bob-device', 'Hello!');
+      final envelope = await alice.encryptMessage(
+        'bob-id',
+        'bob-device',
+        'Hello!',
+      );
 
       expect(envelope, isA<Map<String, dynamic>>());
       expect(envelope['type'], equals('prekey'));
@@ -291,51 +317,67 @@ void main() {
 
   group('SignalProtocolManager message exchange', () {
     test(
-        'Full conversation flow: PreKey -> establish -> messages in both directions',
-        () async {
-      final aliceStorage = FakeSecureStorage();
-      final bobStorage = FakeSecureStorage();
-      final alice = SignalProtocolManager(secureStorage: aliceStorage);
-      final bob = SignalProtocolManager(secureStorage: bobStorage);
-      await alice.initialize();
-      await bob.initialize();
+      'Full conversation flow: PreKey -> establish -> messages in both directions',
+      () async {
+        final aliceStorage = FakeSecureStorage();
+        final bobStorage = FakeSecureStorage();
+        final alice = SignalProtocolManager(secureStorage: aliceStorage);
+        final bob = SignalProtocolManager(secureStorage: bobStorage);
+        await alice.wipeForFreshRegistration();
+        await bob.wipeForFreshRegistration();
+        await alice.initialize();
+        await bob.initialize();
 
-      await aliceStorage.write(key: 'user_id', value: 'alice-id');
-      await aliceStorage.write(key: 'device_id', value: 'alice-device');
-      await bobStorage.write(key: 'user_id', value: 'bob-id');
-      await bobStorage.write(key: 'device_id', value: 'bob-device');
+        await aliceStorage.write(key: 'user_id', value: 'alice-id');
+        await aliceStorage.write(key: 'device_id', value: 'alice-device');
+        await bobStorage.write(key: 'user_id', value: 'bob-id');
+        await bobStorage.write(key: 'device_id', value: 'bob-device');
 
-      // Get Bob's key bundle (simulating server fetch)
-      final bobBundleMap = await bob.generateKeyBundle();
-      final bundle = _bundleFromMap(
-        bobBundleMap,
-        userId: 'bob-id',
-        deviceId: 'bob-device',
-      );
+        // Get Bob's key bundle (simulating server fetch)
+        final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(
+          bob,
+        );
+        final bundle = acceptedBob.consumerBundle(
+          userId: 'bob-id',
+          deviceId: 'bob-device',
+        );
 
-      // Alice creates session from Bob's bundle (X3DH initiator)
-      await alice.createSession(bundle);
+        // Alice creates session from Bob's bundle (X3DH initiator)
+        await alice.createSession(bundle);
 
-      // Alice encrypts first message (should be PreKey type)
-      final envelope1 =
-          await alice.encryptMessage('bob-id', 'bob-device', 'Hello Bob!');
-      expect(envelope1['type'], equals('prekey'));
+        // Alice encrypts first message (should be PreKey type)
+        final envelope1 = await alice.encryptMessage(
+          'bob-id',
+          'bob-device',
+          'Hello Bob!',
+        );
+        expect(envelope1['type'], equals('prekey'));
 
-      // Bob decrypts the PreKey message -> establishes Bob's session
-      final plaintext1 =
-          await bob.decryptMessage('alice-id', 'alice-device', envelope1);
-      expect(plaintext1, equals('Hello Bob!'));
+        // Bob decrypts the PreKey message -> establishes Bob's session
+        final plaintext1 = await bob.decryptMessage(
+          'alice-id',
+          'alice-device',
+          envelope1,
+        );
+        expect(plaintext1, equals('Hello Bob!'));
 
-      // Bob replies (should be normal message type since session is established)
-      final envelope2 =
-          await bob.encryptMessage('alice-id', 'alice-device', 'Hi Alice!');
-      expect(envelope2['type'], equals('message'));
+        // Bob replies (should be normal message type since session is established)
+        final envelope2 = await bob.encryptMessage(
+          'alice-id',
+          'alice-device',
+          'Hi Alice!',
+        );
+        expect(envelope2['type'], equals('message'));
 
-      // Alice decrypts Bob's reply
-      final plaintext2 =
-          await alice.decryptMessage('bob-id', 'bob-device', envelope2);
-      expect(plaintext2, equals('Hi Alice!'));
-    });
+        // Alice decrypts Bob's reply
+        final plaintext2 = await alice.decryptMessage(
+          'bob-id',
+          'bob-device',
+          envelope2,
+        );
+        expect(plaintext2, equals('Hi Alice!'));
+      },
+    );
 
     test('Multiple messages in both directions', () async {
       final session = await _createFullSession();
@@ -349,8 +391,11 @@ void main() {
           'bob-device',
           'Alice message $i',
         );
-        final plain =
-            await bob.decryptMessage('alice-id', 'alice-device', envelope);
+        final plain = await bob.decryptMessage(
+          'alice-id',
+          'alice-device',
+          envelope,
+        );
         expect(plain, equals('Alice message $i'));
       }
 
@@ -361,8 +406,11 @@ void main() {
           'alice-device',
           'Bob message $i',
         );
-        final plain =
-            await alice.decryptMessage('bob-id', 'bob-device', envelope);
+        final plain = await alice.decryptMessage(
+          'bob-id',
+          'bob-device',
+          envelope,
+        );
         expect(plain, equals('Bob message $i'));
       }
 
@@ -410,21 +458,13 @@ void main() {
 
       // Empty-ish content (single character)
       const singleChar = 'X';
-      final e3 = await alice.encryptMessage(
-        'bob-id',
-        'bob-device',
-        singleChar,
-      );
+      final e3 = await alice.encryptMessage('bob-id', 'bob-device', singleChar);
       final p3 = await bob.decryptMessage('alice-id', 'alice-device', e3);
       expect(p3, equals(singleChar));
 
       // Newlines and special chars
       const special = 'Line1\nLine2\tTab\r\nWindows\x00null';
-      final e4 = await alice.encryptMessage(
-        'bob-id',
-        'bob-device',
-        special,
-      );
+      final e4 = await alice.encryptMessage('bob-id', 'bob-device', special);
       final p4 = await bob.decryptMessage('alice-id', 'alice-device', e4);
       expect(p4, equals(special));
     });
@@ -434,96 +474,107 @@ void main() {
 
   group('SignalProtocolManager sealed sender', () {
     test(
-        'encryptSealedSender -> decryptSealedSender round-trip recovers sender identity',
-        () async {
-      final session = await _createFullSession();
-      final alice = session.alice;
-      final bob = session.bob;
+      'encryptSealedSender -> decryptSealedSender round-trip recovers sender identity',
+      () async {
+        final session = await _createFullSession();
+        final alice = session.alice;
+        final bob = session.bob;
 
-      // Get Bob's identity public key for sealed sender
-      final bobIdentityKey = await bob.getIdentityPublicKey();
+        // Get Bob's identity public key for sealed sender
+        final bobIdentityKey = await bob.getIdentityPublicKey();
 
-      // Alice sends a sealed sender message
-      final sealedEnvelope = await alice.encryptSealedSender(
-        'bob-id',
-        'bob-device',
-        bobIdentityKey,
-        'Secret sealed message',
-      );
+        // Alice sends a sealed sender message
+        final sealedEnvelope = await alice.encryptSealedSender(
+          'bob-id',
+          'bob-device',
+          bobIdentityKey,
+          'Secret sealed message',
+        );
 
-      // Bob decrypts the sealed sender envelope
-      final result = await bob.decryptSealedSender(sealedEnvelope);
+        // Bob decrypts the sealed sender envelope
+        final result = await bob.decryptSealedSender(sealedEnvelope);
 
-      expect(result.senderId, equals('alice-id'));
-      expect(result.senderDeviceId, equals('alice-device'));
-      expect(result.plaintext, equals('Secret sealed message'));
-    });
+        expect(result.senderId, equals('alice-id'));
+        expect(result.senderDeviceId, equals('alice-device'));
+        expect(result.plaintext, equals('Secret sealed message'));
+      },
+    );
 
-    test('Sealed sender message hides sender from envelope inspection',
-        () async {
-      final session = await _createFullSession();
-      final alice = session.alice;
-      final bob = session.bob;
+    test(
+      'Sealed sender message hides sender from envelope inspection',
+      () async {
+        final session = await _createFullSession();
+        final alice = session.alice;
+        final bob = session.bob;
 
-      final bobIdentityKey = await bob.getIdentityPublicKey();
+        final bobIdentityKey = await bob.getIdentityPublicKey();
 
-      final sealedEnvelope = await alice.encryptSealedSender(
-        'bob-id',
-        'bob-device',
-        bobIdentityKey,
-        'Hidden sender test',
-      );
+        final sealedEnvelope = await alice.encryptSealedSender(
+          'bob-id',
+          'bob-device',
+          bobIdentityKey,
+          'Hidden sender test',
+        );
 
-      // The sealed envelope should NOT contain sender identity in plaintext
-      final envelopeJson = jsonEncode(sealedEnvelope);
-      expect(envelopeJson, isNot(contains('alice-id')));
-      expect(envelopeJson, isNot(contains('alice-device')));
+        // The sealed envelope should NOT contain sender identity in plaintext
+        final envelopeJson = jsonEncode(sealedEnvelope);
+        expect(envelopeJson, isNot(contains('alice-id')));
+        expect(envelopeJson, isNot(contains('alice-device')));
 
-      // It should only have ephemeral key, ciphertext, and nonce
-      expect(sealedEnvelope, contains('ephemeralPublicKey'));
-      expect(sealedEnvelope, contains('ciphertext'));
-      expect(sealedEnvelope, contains('nonce'));
-    });
+        // It should only have ephemeral key, ciphertext, and nonce
+        expect(sealedEnvelope, contains('ephemeralPublicKey'));
+        expect(sealedEnvelope, contains('ciphertext'));
+        expect(sealedEnvelope, contains('nonce'));
+      },
+    );
   });
 
   // ── Group Messaging ────────────────────────────────────────────────
 
   group('SignalProtocolManager group messaging', () {
     test(
-        'Generate group sender key + distribute + encrypt + decrypt round-trip',
-        () async {
-      final aliceStorage = FakeSecureStorage();
-      final bobStorage = FakeSecureStorage();
-      final alice = SignalProtocolManager(secureStorage: aliceStorage);
-      final bob = SignalProtocolManager(secureStorage: bobStorage);
-      await alice.initialize();
-      await bob.initialize();
+      'Generate group sender key + distribute + encrypt + decrypt round-trip',
+      () async {
+        final aliceStorage = FakeSecureStorage();
+        final bobStorage = FakeSecureStorage();
+        final alice = SignalProtocolManager(secureStorage: aliceStorage);
+        final bob = SignalProtocolManager(secureStorage: bobStorage);
+        await alice.wipeForFreshRegistration();
+        await bob.wipeForFreshRegistration();
+        await alice.initialize();
+        await bob.initialize();
 
-      await aliceStorage.write(key: 'user_id', value: 'alice-id');
-      await bobStorage.write(key: 'user_id', value: 'bob-id');
+        await aliceStorage.write(key: 'user_id', value: 'alice-id');
+        await bobStorage.write(key: 'user_id', value: 'bob-id');
 
-      const groupId = 'group-test-1';
+        const groupId = 'group-test-1';
 
-      // Alice generates a sender key for the group
-      final distribution = await alice.generateGroupSenderKey(groupId);
-      expect(distribution.groupId, equals(groupId));
-      expect(distribution.senderId, equals('alice-id'));
-      expect(distribution.chainKey, isNotEmpty);
-      expect(distribution.signingKey, isNotEmpty);
+        // Alice generates a sender key for the group
+        final distribution = await alice.generateGroupSenderKey(groupId);
+        expect(distribution.groupId, equals(groupId));
+        expect(distribution.senderId, equals('alice-id'));
+        expect(distribution.chainKey, isNotEmpty);
+        expect(distribution.signingKey, isNotEmpty);
 
-      // Bob processes Alice's sender key distribution
-      await bob.processGroupSenderKey(groupId, 'alice-id', distribution);
+        // Bob processes Alice's sender key distribution
+        await bob.processGroupSenderKey(groupId, 'alice-id', distribution);
 
-      // Alice encrypts a group message
-      final ciphertext =
-          await alice.encryptGroupMessage(groupId, 'Hello group!');
-      expect(ciphertext, isNotEmpty);
+        // Alice encrypts a group message
+        final ciphertext = await alice.encryptGroupMessage(
+          groupId,
+          'Hello group!',
+        );
+        expect(ciphertext, isNotEmpty);
 
-      // Bob decrypts Alice's group message
-      final plaintext =
-          await bob.decryptGroupMessage(groupId, 'alice-id', ciphertext);
-      expect(plaintext, equals('Hello group!'));
-    });
+        // Bob decrypts Alice's group message
+        final plaintext = await bob.decryptGroupMessage(
+          groupId,
+          'alice-id',
+          ciphertext,
+        );
+        expect(plaintext, equals('Hello group!'));
+      },
+    );
 
     test('Multiple members exchange group messages', () async {
       final aliceStorage = FakeSecureStorage();
@@ -532,6 +583,9 @@ void main() {
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
       final charlie = SignalProtocolManager(secureStorage: charlieStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
+      await charlie.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
       await charlie.initialize();
@@ -580,8 +634,10 @@ void main() {
       );
 
       // Charlie sends -- Alice and Bob decrypt
-      final charlieMsg =
-          await charlie.encryptGroupMessage(groupId, 'From Charlie');
+      final charlieMsg = await charlie.encryptGroupMessage(
+        groupId,
+        'From Charlie',
+      );
       expect(
         await alice.decryptGroupMessage(groupId, 'charlie-id', charlieMsg),
         equals('From Charlie'),
@@ -618,20 +674,27 @@ void main() {
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob1 = SignalProtocolManager(secureStorage: bobStorage1);
       final bob2 = SignalProtocolManager(secureStorage: bobStorage2);
+      await alice.wipeForFreshRegistration();
+      await bob1.wipeForFreshRegistration();
+      await bob2.wipeForFreshRegistration();
       await alice.initialize();
       await bob1.initialize();
       await bob2.initialize();
 
       // Create session with Bob device-1
-      final bobBundle1 = await bob1.generateKeyBundle();
+      final acceptedBob1 = await CryptoTestFixtures.acceptInitialGeneration(
+        bob1,
+      );
       await alice.createSession(
-        _bundleFromMap(bobBundle1, userId: 'bob-id', deviceId: 'bob-device-1'),
+        acceptedBob1.consumerBundle(userId: 'bob-id', deviceId: 'bob-device-1'),
       );
 
-      // Create session with Bob device-2
-      final bobBundle2 = await bob2.generateKeyBundle();
+      // Create session with Bob device-2. The identity key is a property of
+      // the ACCOUNT, so Bob's second device presents the same one; a second
+      // device claiming a different identity is a relay inventing a device id
+      // and is refused (see the outbound continuity test below).
       await alice.createSession(
-        _bundleFromMap(bobBundle2, userId: 'bob-id', deviceId: 'bob-device-2'),
+        acceptedBob1.consumerBundle(userId: 'bob-id', deviceId: 'bob-device-2'),
       );
 
       // Both sessions should exist
@@ -644,7 +707,63 @@ void main() {
       // Both should be gone
       expect(await alice.hasSession('bob-id', 'bob-device-1'), isFalse);
       expect(await alice.hasSession('bob-id', 'bob-device-2'), isFalse);
+
+      // ...but the trust anchors survive, so a later handshake still has
+      // something to check an impostor against.
+      expect(
+        await alice.getSessionIdentityKey('bob-id', 'bob-device-1'),
+        isNotNull,
+      );
     });
+
+    test(
+      'a second device claiming a different identity key is refused',
+      () async {
+        final aliceStorage = FakeSecureStorage();
+        final bobStorage = FakeSecureStorage();
+        final evilStorage = FakeSecureStorage();
+        final alice = SignalProtocolManager(secureStorage: aliceStorage);
+        final bob = SignalProtocolManager(secureStorage: bobStorage);
+        final evil = SignalProtocolManager(secureStorage: evilStorage);
+        await alice.wipeForFreshRegistration();
+        await bob.wipeForFreshRegistration();
+        await evil.wipeForFreshRegistration();
+        await alice.initialize();
+        await bob.initialize();
+        await evil.initialize();
+
+        final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(
+          bob,
+        );
+        await alice.createSession(
+          acceptedBob.consumerBundle(userId: 'bob-id', deviceId: 'bob-d1'),
+        );
+
+        // The relay names a device id Alice has never seen and hands back its
+        // own bundle for it. Nothing about the device id is authenticated, so
+        // the only thing that can catch this is the contact-level pin.
+        final acceptedEvil = await CryptoTestFixtures.acceptInitialGeneration(
+          evil,
+        );
+        await expectLater(
+          alice.createSession(
+            acceptedEvil.consumerBundle(userId: 'bob-id', deviceId: 'relay-d9'),
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        expect(await alice.hasSession('bob-id', 'relay-d9'), isFalse);
+        expect(
+          await alice.getSessionIdentityKey('bob-id', 'relay-d9'),
+          isNull,
+          reason: 'a refused bundle must leave no pin behind',
+        );
+        expect(
+          await alice.getSessionDevices('bob-id'),
+          isNot(contains('relay-d9')),
+        );
+      },
+    );
   });
 
   // ── Safety Numbers ──────────────────────────────────────────────────
@@ -703,37 +822,67 @@ void main() {
   // ── Pre-key Replenishment ──────────────────────────────────────────
 
   group('SignalProtocolManager pre-key replenishment', () {
-    test('generateOneTimePreKeys generates and persists new keys', () async {
-      final (manager, storage) =
-          await CryptoTestFixtures.createInitializedManager();
+    test('full replacement generates the exact fresh OPK count', () async {
+      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
+      await CryptoTestFixtures.acceptInitialGeneration(manager);
 
-      final newKeys = await manager.generateOneTimePreKeys(10);
+      final replacement = await CryptoTestFixtures.acceptReplacementGeneration(
+        manager,
+        deviceId: 'device-1',
+        oneTimePreKeyCount: 10,
+      );
+      final newKeys = replacement.publicMaterial['oneTimePreKeys'] as List;
 
       expect(newKeys.length, equals(10));
       for (final key in newKeys) {
-        expect(key, containsPair('keyId', isA<int>()));
-        expect(key, containsPair('publicKey', isA<String>()));
-        expect((key['publicKey'] as String), isNotEmpty);
+        final publicKey = key as Map<String, dynamic>;
+        expect(publicKey, containsPair('keyId', isA<int>()));
+        expect(publicKey, containsPair('publicKey', isA<String>()));
+        expect((publicKey['publicKey'] as String), isNotEmpty);
       }
     });
 
-    test('Generated keys have sequential IDs', () async {
-      final (manager, _) = await CryptoTestFixtures.createInitializedManager();
+    test(
+      'replacement OPK IDs are sequential, monotonic and disjoint',
+      () async {
+        final (manager, _) =
+            await CryptoTestFixtures.createInitializedManager();
+        final initial = await CryptoTestFixtures.acceptInitialGeneration(
+          manager,
+          oneTimePreKeyCount: 5,
+        );
 
-      // After initialize(), 20 OTPs are generated (IDs 0-19), nextPreKeyId=20
-      final batch1 = await manager.generateOneTimePreKeys(5);
-      final batch2 = await manager.generateOneTimePreKeys(5);
+        final first = await CryptoTestFixtures.acceptReplacementGeneration(
+          manager,
+          deviceId: 'device-1',
+          oneTimePreKeyCount: 5,
+        );
+        final second = await CryptoTestFixtures.acceptReplacementGeneration(
+          manager,
+          deviceId: 'device-1',
+          oneTimePreKeyCount: 5,
+        );
+        List<int> ids(AcceptedTestGeneration generation) =>
+            (generation.publicMaterial['oneTimePreKeys'] as List)
+                .map((entry) => (entry as Map)['keyId'] as int)
+                .toList(growable: false);
+        final initialIds = ids(initial);
+        final firstIds = ids(first);
+        final secondIds = ids(second);
 
-      // batch1 should have IDs 20-24
-      for (var i = 0; i < 5; i++) {
-        expect(batch1[i]['keyId'], equals(20 + i));
-      }
-
-      // batch2 should have IDs 25-29
-      for (var i = 0; i < 5; i++) {
-        expect(batch2[i]['keyId'], equals(25 + i));
-      }
-    });
+        expect(firstIds.first, greaterThan(initialIds.last));
+        expect(secondIds.first, greaterThan(firstIds.last));
+        expect(
+          firstIds,
+          List<int>.generate(5, (index) => firstIds.first + index),
+        );
+        expect(
+          secondIds,
+          List<int>.generate(5, (index) => secondIds.first + index),
+        );
+        expect(firstIds.toSet().intersection(secondIds.toSet()), isEmpty);
+      },
+    );
   });
 
   // ── Error Handling ──────────────────────────────────────────────────
@@ -757,8 +906,11 @@ void main() {
       final alice = session.alice;
 
       // Encrypt a message from Alice to Bob
-      final envelope =
-          await alice.encryptMessage('bob-id', 'bob-device', 'Test');
+      final envelope = await alice.encryptMessage(
+        'bob-id',
+        'bob-device',
+        'Test',
+      );
 
       // Try to decrypt with a completely different manager (no session)
       final (stranger, strangerStorage) =
@@ -770,15 +922,13 @@ void main() {
       // should throw since there's no session to decrypt with
       final normalEnvelope = {
         'type': 'message',
+        'cryptoProtocolEpoch': RisaalCryptoProtocol.cryptoProtocolEpoch,
         'senderIdentityKey': envelope['senderIdentityKey'],
         'message': envelope['message'],
       };
       expect(
-        () => stranger.decryptMessage(
-          'alice-id',
-          'alice-device',
-          normalEnvelope,
-        ),
+        () =>
+            stranger.decryptMessage('alice-id', 'alice-device', normalEnvelope),
         throwsA(isA<StateError>()),
       );
     });
@@ -787,41 +937,47 @@ void main() {
   // ── Identity Key Persistence ────────────────────────────────────────
 
   group('SignalProtocolManager identity key persistence', () {
-    test('getSessionIdentityKey returns stored key after session creation',
-        () async {
-      final session = await _createFullSession();
-      final alice = session.alice;
+    test(
+      'getSessionIdentityKey returns stored key after session creation',
+      () async {
+        final session = await _createFullSession();
+        final alice = session.alice;
 
-      final storedKey =
-          await alice.getSessionIdentityKey('bob-id', 'bob-device');
-      expect(storedKey, isNotNull);
+        final storedKey = await alice.getSessionIdentityKey(
+          'bob-id',
+          'bob-device',
+        );
+        expect(storedKey, isNotNull);
 
-      // Should match Bob's actual identity key
-      final bobKey = await session.bob.getIdentityPublicKey();
-      expect(storedKey, equals(bobKey));
-    });
+        // Should match Bob's actual identity key
+        final bobKey = await session.bob.getIdentityPublicKey();
+        expect(storedKey, equals(bobKey));
+      },
+    );
   });
 
   // ── Safety Number QR Payload ────────────────────────────────────────
 
   group('SignalProtocolManager QR payload', () {
-    test('getSafetyNumberQrPayload returns valid risaal-verify format',
-        () async {
-      final (alice, _) = await CryptoTestFixtures.createInitializedManager();
-      final (bob, _) = await CryptoTestFixtures.createInitializedManager();
+    test(
+      'getSafetyNumberQrPayload returns valid risaal-verify format',
+      () async {
+        final (alice, _) = await CryptoTestFixtures.createInitializedManager();
+        final (bob, _) = await CryptoTestFixtures.createInitializedManager();
 
-      final bobKey = await bob.getIdentityPublicKey();
+        final bobKey = await bob.getIdentityPublicKey();
 
-      final qrPayload = await alice.getSafetyNumberQrPayload(
-        myUserId: 'alice-id',
-        theirUserId: 'bob-id',
-        theirIdentityKey: bobKey,
-      );
+        final qrPayload = await alice.getSafetyNumberQrPayload(
+          myUserId: 'alice-id',
+          theirUserId: 'bob-id',
+          theirIdentityKey: bobKey,
+        );
 
-      expect(qrPayload, startsWith('risaal-verify:v0:'));
-      final digits = qrPayload.substring('risaal-verify:v0:'.length);
-      expect(digits.length, equals(60));
-      expect(RegExp(r'^\d{60}$').hasMatch(digits), isTrue);
-    });
+        expect(qrPayload, startsWith('risaal-verify:v0:'));
+        final digits = qrPayload.substring('risaal-verify:v0:'.length);
+        expect(digits.length, equals(60));
+        expect(RegExp(r'^\d{60}$').hasMatch(digits), isTrue);
+      },
+    );
   });
 }

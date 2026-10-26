@@ -44,22 +44,20 @@ void main() {
       expect(utf8.decode(decrypted), 'Hello Bob!');
     });
 
-    test('Alice sends multiple sequential messages, Bob decrypts all',
-        () async {
-      final (alice, bob) = await _createSession();
+    test(
+      'Alice sends multiple sequential messages, Bob decrypts all',
+      () async {
+        final (alice, bob) = await _createSession();
 
-      final messages = [
-        'First message',
-        'Second message',
-        'Third message',
-      ];
+        final messages = ['First message', 'Second message', 'Third message'];
 
-      for (final msg in messages) {
-        final encrypted = await alice.encrypt(utf8.encode(msg));
-        final decrypted = await bob.decrypt(encrypted);
-        expect(utf8.decode(decrypted), msg);
-      }
-    });
+        for (final msg in messages) {
+          final encrypted = await alice.encrypt(utf8.encode(msg));
+          final decrypted = await bob.decrypt(encrypted);
+          expect(utf8.decode(decrypted), msg);
+        }
+      },
+    );
 
     test('bidirectional conversation works', () async {
       final (alice, bob) = await _createSession();
@@ -139,17 +137,19 @@ void main() {
       expect(enc1.ciphertext, isNot(equals(enc2.ciphertext)));
     });
 
-    test('different sessions produce different ciphertexts for same plaintext',
-        () async {
-      final (alice1, _) = await _createSession();
-      final (alice2, _) = await _createSession();
+    test(
+      'different sessions produce different ciphertexts for same plaintext',
+      () async {
+        final (alice1, _) = await _createSession();
+        final (alice2, _) = await _createSession();
 
-      final plaintext = utf8.encode('Same message');
-      final enc1 = await alice1.encrypt(plaintext);
-      final enc2 = await alice2.encrypt(plaintext);
+        final plaintext = utf8.encode('Same message');
+        final enc1 = await alice1.encrypt(plaintext);
+        final enc2 = await alice2.encrypt(plaintext);
 
-      expect(enc1.ciphertext, isNot(equals(enc2.ciphertext)));
-    });
+        expect(enc1.ciphertext, isNot(equals(enc2.ciphertext)));
+      },
+    );
 
     test('encrypted message contains correct message numbers', () async {
       final (alice, _) = await _createSession();
@@ -238,8 +238,11 @@ void main() {
       final enc3 = await alice.encrypt(utf8.encode('from alice again'));
       final dhKey2 = enc3.dhPublicKey;
 
-      expect(dhKey1, isNot(equals(dhKey2)),
-          reason: 'DH ratchet key should change after direction switch');
+      expect(
+        dhKey1,
+        isNot(equals(dhKey2)),
+        reason: 'DH ratchet key should change after direction switch',
+      );
 
       final dec3 = await bob.decrypt(enc3);
       expect(utf8.decode(dec3), 'from alice again');

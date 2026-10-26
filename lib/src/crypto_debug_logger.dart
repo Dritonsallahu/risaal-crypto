@@ -1,5 +1,8 @@
-import 'dart:convert';
 import 'dart:developer' as dev;
+
+/// Runtime-safe crypto diagnostics. Every value maps to a fixed code and tag;
+/// no caller-controlled string is part of the emitted event.
+enum CryptoDiagnosticEvent { decryptSucceeded }
 
 /// Security-hardened debug logger for the crypto pipeline.
 ///
@@ -12,28 +15,25 @@ import 'dart:developer' as dev;
 class CryptoDebugLogger {
   CryptoDebugLogger._();
 
+  /// Optional runtime sink for explicitly enabled BETA diagnostics.
+  ///
+  /// Only [event] may invoke this callback. Generic debug methods accept
+  /// arbitrary caller strings and therefore never cross the runtime boundary.
+  /// The host app must still validate both fixed values at its buffer boundary.
+  static void Function(String tag, String eventCode)? _sink;
+
+  /// Setter-only bridge: callers may install or clear a sink but cannot read or
+  /// wrap a previously installed callback.
+  static set sink(void Function(String tag, String eventCode)? value) {
+    _sink = value;
+  }
+
   static void log(String tag, String message) {
-    assert(() {
-      final timestamp = DateTime.now().toIso8601String();
-      dev.log('[$timestamp] [$tag] $message', name: 'RISAAL_CRYPTO');
-      return true;
-    }());
+    _debugEvent('crypto_debug_event');
   }
 
   static void logKeyInfo(String tag, String label, String base64Key) {
-    assert(() {
-      final bytes = base64Decode(base64Key);
-      final preview = base64Key.substring(
-        0,
-        base64Key.length > 8 ? 8 : base64Key.length,
-      );
-      final timestamp = DateTime.now().toIso8601String();
-      dev.log(
-        '[$timestamp] [$tag] $label: ${bytes.length} bytes, first4=$preview...',
-        name: 'RISAAL_CRYPTO',
-      );
-      return true;
-    }());
+    _debugEvent('key_state_event');
   }
 
   static void logRatchetState(
@@ -41,42 +41,11 @@ class CryptoDebugLogger {
     String label,
     Map<String, dynamic> state,
   ) {
-    assert(() {
-      final sendN = state['sendMessageNumber'] ?? '?';
-      final recvN = state['receiveMessageNumber'] ?? '?';
-      final prevChain = state['previousChainLength'] ?? '?';
-      final skipped = (state['skippedKeys'] as Map?)?.length ?? 0;
-      final hasRecvChain =
-          (state['receivingChainKey'] as String?)?.isNotEmpty ?? false;
-      final hasSendChain =
-          (state['sendingChainKey'] as String?)?.isNotEmpty ?? false;
-      final dhRecvKey = state['dhReceivingKey'] as String? ?? '';
-
-      final dhPreview = dhRecvKey.isEmpty
-          ? '(empty)'
-          : '${dhRecvKey.substring(0, dhRecvKey.length > 8 ? 8 : dhRecvKey.length)}...';
-
-      final timestamp = DateTime.now().toIso8601String();
-      dev.log(
-        '[$timestamp] [$tag] $label: sendN=$sendN recvN=$recvN '
-        'prevChain=$prevChain skipped=$skipped '
-        'hasSendChain=$hasSendChain hasRecvChain=$hasRecvChain '
-        'dhRecvKey=$dhPreview',
-        name: 'RISAAL_CRYPTO',
-      );
-      return true;
-    }());
+    _debugEvent('ratchet_state_event');
   }
 
   static void logError(String tag, String message, Object error) {
-    assert(() {
-      final timestamp = DateTime.now().toIso8601String();
-      dev.log(
-        '[$timestamp] [$tag] ERROR: $message — $error',
-        name: 'RISAAL_CRYPTO',
-      );
-      return true;
-    }());
+    _debugEvent('crypto_operation_failed');
   }
 
   static void logSessionInfo(
@@ -84,14 +53,33 @@ class CryptoDebugLogger {
     String label,
     Map<String, dynamic> info,
   ) {
+    _debugEvent('session_state_event');
+  }
+
+  static void _debugEvent(String eventCode) {
     assert(() {
-      final timestamp = DateTime.now().toIso8601String();
-      final buffer = StringBuffer('[$timestamp] [$tag] $label:');
-      for (final entry in info.entries) {
-        buffer.write(' ${entry.key}=${entry.value}');
-      }
-      dev.log(buffer.toString(), name: 'RISAAL_CRYPTO');
+      dev.log(eventCode, name: 'RISAAL_CRYPTO');
       return true;
     }());
+  }
+
+  static void event(CryptoDiagnosticEvent event) {
+    switch (event) {
+      case CryptoDiagnosticEvent.decryptSucceeded:
+        assert(() {
+          dev.log('decrypt_succeeded', name: 'RISAAL_CRYPTO');
+          return true;
+        }());
+        try {
+          _sink?.call('DECRYPT_MSG', 'decrypt_succeeded');
+        } catch (_) {
+          // Diagnostics must never alter crypto control flow or turn a
+          // successful state transition into an application-level failure.
+          assert(() {
+            dev.log('diagnostic_sink_failed', name: 'RISAAL_CRYPTO');
+            return true;
+          }());
+        }
+    }
   }
 }

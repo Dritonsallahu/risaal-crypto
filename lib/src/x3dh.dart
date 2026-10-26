@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' hide KeyPair;
 
-import 'crypto_debug_logger.dart';
+import 'crypto_protocol.dart';
 import 'secure_memory.dart';
 import 'key_helper.dart';
 import 'models/signal_keys.dart';
@@ -25,6 +25,13 @@ class X3DHResult {
   /// [PqxdhPolicy] was [PqxdhPolicy.classicalOnly].
   final String? kyberCiphertext;
 
+  /// Exact recipient KEM key routing metadata. Present iff
+  /// [kyberCiphertext] is present.
+  final MlKemEnvelopeMetadata? kemMetadata;
+
+  /// Exact server-accepted generation and key-selection transcript.
+  final PreKeyHandshakeRouting routing;
+
   /// Whether the post-quantum Kyber component was successfully used.
   ///
   /// `true` if Kyber encapsulation succeeded and the Kyber shared secret
@@ -40,6 +47,8 @@ class X3DHResult {
     required this.ephemeralPublicKey,
     this.usedOneTimePreKeyId,
     this.kyberCiphertext,
+    this.kemMetadata,
+    required this.routing,
     required this.pqxdhUsed,
   });
 }
@@ -49,7 +58,6 @@ class X3DHResult {
 /// Establishes a shared secret between an initiator (Alice) and a
 /// responder (Bob) without requiring both to be online simultaneously.
 class X3DH {
-  static const _info = 'Risaal_X3DH';
   static final _x25519 = X25519();
   static final _hkdf = Hkdf(hmac: Hmac(Sha256()), outputLength: 32);
 
@@ -73,11 +81,26 @@ class X3DH {
   /// The default is [PqxdhPolicy.requirePq] so that every new session is
   /// hybrid by construction. Callers that legitimately need to interoperate
   /// with peers missing a Kyber key must opt into [preferPq] explicitly.
+  ///
+  /// [transcriptVersion] 2 (R4-L1) binds both identity keys into the HKDF
+  /// info; the returned [X3DHResult.routing] carries it for the PreKey
+  /// message. The responder derives with whatever version that routing names.
   static Future<X3DHResult> initiateKeyAgreement({
     required KeyPair identityKeyPair,
     required PreKeyBundle recipientBundle,
     PqxdhPolicy pqxdhPolicy = PqxdhPolicy.requirePq,
+    int transcriptVersion = 1,
   }) async {
+    if (pqxdhPolicy != PqxdhPolicy.requirePq) {
+      throw UnsupportedError(
+        'Epoch 2 requires PQXDH; downgrade policies are not supported',
+      );
+    }
+    final routing = recipientBundle
+        .requireCurrentRouting()
+        .withTranscriptVersion(transcriptVersion);
+    routing.requireCurrent();
+
     // Verify the signed pre-key signature using the recipient's Ed25519
     // signing key. Verification is mandatory — bundles without a signing
     // key are rejected at the model layer, and invalid signatures abort
@@ -89,6 +112,23 @@ class X3DH {
     );
     if (!signatureValid) {
       throw StateError('Signed pre-key signature verification failed');
+    }
+
+    // Validate all static ML-KEM material before ephemeral generation or DH.
+    final recipientKem = recipientBundle.kyberPreKey;
+    if (recipientKem == null || !recipientKem.isCurrentProtocol) {
+      throw StateError('PQXDH requires a current ML-KEM pre-key');
+    }
+    final kyberSigValid = await SignalKeyHelper.verify(
+      recipientBundle.identitySigningKey,
+      RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+        keyId: recipientKem.keyId,
+        publicKey: recipientKem.publicKey,
+      ),
+      recipientKem.signature,
+    );
+    if (!kyberSigValid) {
+      throw StateError('ML-KEM pre-key signature verification failed');
     }
 
     // Generate ephemeral key pair
@@ -118,56 +158,20 @@ class X3DH {
       usedOPKId = recipientBundle.oneTimePreKey!.keyId;
     }
 
-    // Kyber KEM encapsulation (post-quantum layer) — policy-controlled.
-    // The PqxdhPolicy determines how failures and missing keys are handled.
-    List<int>? kyberSharedSecret;
-    String? kyberCiphertext;
-    var pqxdhUsed = false;
-
-    if (pqxdhPolicy == PqxdhPolicy.classicalOnly) {
-      // Classical only — skip Kyber entirely, even if bundle has a key.
-      CryptoDebugLogger.log(
-        'X3DH',
-        'PQXDH policy=classicalOnly — skipping Kyber',
+    late final List<int> kyberSharedSecret;
+    late final String kyberCiphertext;
+    try {
+      final (ct, ss) = SignalKeyHelper.kyberEncapsulate(recipientKem.publicKey);
+      kyberCiphertext = ct;
+      kyberSharedSecret = ss;
+    } catch (error) {
+      throw StateError(
+        'PQXDH required but ML-KEM encapsulation failed: $error',
       );
-    } else if (recipientBundle.kyberPreKey == null) {
-      // Bundle has no Kyber key
-      if (pqxdhPolicy == PqxdhPolicy.requirePq) {
-        throw StateError(
-          'PQXDH required but recipient bundle has no Kyber pre-key',
-        );
-      }
-      // preferPq: log warning and continue without PQ
-      CryptoDebugLogger.log(
-        'X3DH',
-        'WARNING: PQXDH preferred but recipient has no Kyber key — '
-            'degrading to classical X25519-only',
-      );
-    } else {
-      // Bundle has Kyber key — attempt encapsulation
-      try {
-        final (ct, ss) = SignalKeyHelper.kyberEncapsulate(
-          recipientBundle.kyberPreKey!.publicKey,
-        );
-        kyberCiphertext = ct;
-        kyberSharedSecret = ss;
-        pqxdhUsed = true;
-      } catch (e) {
-        if (pqxdhPolicy == PqxdhPolicy.requirePq) {
-          throw StateError(
-            'PQXDH required but Kyber encapsulation failed: $e',
-          );
-        }
-        // preferPq: log warning and continue without PQ
-        CryptoDebugLogger.log(
-          'X3DH',
-          'WARNING: Kyber encapsulation failed — degrading to '
-              'classical X25519-only: $e',
-        );
-        kyberSharedSecret = null;
-        kyberCiphertext = null;
-      }
     }
+    final kemMetadata = MlKemEnvelopeMetadata.current(
+      recipientKeyId: recipientKem.keyId,
+    );
 
     // Concatenate all DH outputs + Kyber shared secret
     final dhConcat = <int>[
@@ -175,26 +179,38 @@ class X3DH {
       ...dh2,
       ...dh3,
       if (dh4 != null) ...dh4,
-      if (kyberSharedSecret != null) ...kyberSharedSecret,
+      ...kyberSharedSecret,
     ];
 
-    // Derive the shared secret via HKDF
-    final sharedSecret = await _deriveSecret(dhConcat);
+    // Derive the shared secret via HKDF. Transcript 2 binds both identity
+    // keys into the info (R4-L1); transcript 1 ignores them.
+    final sharedSecret = await _deriveSecret(
+      dhConcat,
+      routing.bindIdentityKeys(
+        initiatorIdentityKey: identityKeyPair.publicKey,
+        responderIdentityKey: recipientBundle.identityKey,
+      ),
+    );
 
-    // Securely wipe DH intermediaries — they must not persist in RAM.
-    SecureMemory.zeroBytes(dh1);
-    SecureMemory.zeroBytes(dh2);
-    SecureMemory.zeroBytes(dh3);
-    if (dh4 != null) SecureMemory.zeroBytes(dh4);
-    if (kyberSharedSecret != null) SecureMemory.zeroBytes(kyberSharedSecret);
-    SecureMemory.zeroBytes(dhConcat);
+    // Wipe the package-owned DH intermediaries (best-effort, Dart heap).
+    // Non-short-circuit `&`: every buffer is zeroed, also in release builds.
+    final wiped =
+        SecureMemory.zeroBytes(dh1) &
+        SecureMemory.zeroBytes(dh2) &
+        SecureMemory.zeroBytes(dh3) &
+        (dh4 == null || SecureMemory.zeroBytes(dh4)) &
+        SecureMemory.zeroBytes(kyberSharedSecret) &
+        SecureMemory.zeroBytes(dhConcat);
+    assert(wiped, 'X3DH intermediaries must be package-owned and zeroable');
 
     return X3DHResult(
       sharedSecret: sharedSecret,
       ephemeralPublicKey: ephemeralKeyPair.publicKey,
       usedOneTimePreKeyId: usedOPKId,
       kyberCiphertext: kyberCiphertext,
-      pqxdhUsed: pqxdhUsed,
+      kemMetadata: kemMetadata,
+      routing: routing,
+      pqxdhUsed: true,
     );
   }
 
@@ -218,10 +234,28 @@ class X3DH {
     required OneTimePreKey? oneTimePreKey,
     required String senderIdentityKey,
     required String senderEphemeralKey,
-    KyberKeyPair? kyberKeyPair,
-    String? kyberCiphertext,
+    required KyberKeyPair kyberKeyPair,
+    required String kyberCiphertext,
+    required PreKeyHandshakeRouting routing,
     PqxdhPolicy pqxdhPolicy = PqxdhPolicy.requirePq,
   }) async {
+    if (pqxdhPolicy != PqxdhPolicy.requirePq) {
+      throw UnsupportedError(
+        'Epoch 2 requires PQXDH; downgrade policies are not supported',
+      );
+    }
+    routing.requireCurrent();
+    if (!kyberKeyPair.isCurrentProtocol) {
+      throw StateError('PQXDH requires current, versioned ML-KEM material');
+    }
+    if (signedPreKey.keyId != routing.recipientSignedPreKeyId ||
+        oneTimePreKey?.keyId != routing.usedOneTimePreKeyId ||
+        kyberKeyPair.keyId != routing.kemMetadata.recipientKeyId) {
+      throw const FormatException(
+        'PQXDH private material does not match authenticated routing',
+      );
+    }
+
     final ikB = await _buildKeyPair(identityKeyPair);
     final spkB = await _buildKeyPair(signedPreKey.keyPair);
     final ikA = _buildPublicKey(senderIdentityKey);
@@ -243,39 +277,15 @@ class X3DH {
       dh4 = await _dh(opkB, ekA);
     }
 
-    // Kyber KEM decapsulation (post-quantum layer) — policy-controlled.
-    List<int>? kyberSharedSecret;
-    if (pqxdhPolicy == PqxdhPolicy.classicalOnly) {
-      // Classical only — ignore Kyber ciphertext even if present.
-      CryptoDebugLogger.log(
-        'X3DH',
-        'PQXDH policy=classicalOnly (responder) — skipping Kyber',
+    late final List<int> kyberSharedSecret;
+    try {
+      kyberSharedSecret = SignalKeyHelper.kyberDecapsulate(
+        kyberKeyPair.privateKey,
+        kyberCiphertext,
       );
-    } else if (kyberKeyPair != null && kyberCiphertext != null) {
-      try {
-        kyberSharedSecret = SignalKeyHelper.kyberDecapsulate(
-          kyberKeyPair.privateKey,
-          kyberCiphertext,
-        );
-      } catch (e) {
-        if (pqxdhPolicy == PqxdhPolicy.requirePq) {
-          throw StateError(
-            'PQXDH required but Kyber decapsulation failed: $e',
-          );
-        }
-        // preferPq: log warning and continue without PQ
-        CryptoDebugLogger.log(
-          'X3DH',
-          'WARNING: Kyber decapsulation failed (responder) — '
-              'degrading to classical X25519-only: $e',
-        );
-        kyberSharedSecret = null;
-      }
-    } else if (pqxdhPolicy == PqxdhPolicy.requirePq) {
-      // requirePq but no Kyber material available
+    } catch (error) {
       throw StateError(
-        'PQXDH required but no Kyber key pair or ciphertext available '
-        'for decapsulation',
+        'PQXDH required but ML-KEM decapsulation failed: $error',
       );
     }
 
@@ -284,18 +294,27 @@ class X3DH {
       ...dh2,
       ...dh3,
       if (dh4 != null) ...dh4,
-      if (kyberSharedSecret != null) ...kyberSharedSecret,
+      ...kyberSharedSecret,
     ];
 
-    final sharedSecret = await _deriveSecret(dhConcat);
+    final sharedSecret = await _deriveSecret(
+      dhConcat,
+      routing.bindIdentityKeys(
+        initiatorIdentityKey: senderIdentityKey,
+        responderIdentityKey: identityKeyPair.publicKey,
+      ),
+    );
 
-    // Securely wipe DH intermediaries
-    SecureMemory.zeroBytes(dh1);
-    SecureMemory.zeroBytes(dh2);
-    SecureMemory.zeroBytes(dh3);
-    if (dh4 != null) SecureMemory.zeroBytes(dh4);
-    if (kyberSharedSecret != null) SecureMemory.zeroBytes(kyberSharedSecret);
-    SecureMemory.zeroBytes(dhConcat);
+    // Wipe the package-owned DH intermediaries (best-effort, Dart heap).
+    // Non-short-circuit `&`: every buffer is zeroed, also in release builds.
+    final wiped =
+        SecureMemory.zeroBytes(dh1) &
+        SecureMemory.zeroBytes(dh2) &
+        SecureMemory.zeroBytes(dh3) &
+        (dh4 == null || SecureMemory.zeroBytes(dh4)) &
+        SecureMemory.zeroBytes(kyberSharedSecret) &
+        SecureMemory.zeroBytes(dhConcat);
+    assert(wiped, 'X3DH intermediaries must be package-owned and zeroable');
 
     return sharedSecret;
   }
@@ -311,18 +330,37 @@ class X3DH {
       keyPair: localKeyPair,
       remotePublicKey: remotePublicKey,
     );
-    return secret.extractBytes();
+    final out = SecureMemory.ownedCopy(await secret.extractBytes());
+    secret.destroy();
+    SignalKeyHelper.requireContributoryX25519(out);
+    return out;
   }
 
   /// HKDF-SHA256 derivation of a 32-byte shared secret.
   /// [inputKeyMaterial] is NOT wiped here — caller is responsible.
-  static Future<List<int>> _deriveSecret(List<int> inputKeyMaterial) async {
+  ///
+  /// A2-4 (Signal X3DH / PQXDH spec compliance): the KDF input is prefixed with
+  /// F = 32 bytes of 0xFF (one X25519 public-key length). F provides domain
+  /// separation / downgrade resistance — without it the KDF is not separated
+  /// from a hypothetical classical-only variant. NOTE: this changes the derived
+  /// secret, so it is a WIRE-BREAKING change — a peer on an old build derives a
+  /// different SK and cannot establish a NEW session (existing ratchets keep
+  /// their stored state). Roll out to all clients together.
+  static Future<List<int>> _deriveSecret(
+    List<int> inputKeyMaterial,
+    PreKeyHandshakeRouting routing,
+  ) async {
+    final km = <int>[...List<int>.filled(32, 0xFF), ...inputKeyMaterial];
     final secretKey = await _hkdf.deriveKey(
-      secretKey: SecretKey(inputKeyMaterial),
-      info: _info.codeUnits,
+      secretKey: SecretKey(km),
+      info: routing.canonicalTranscript(),
       nonce: Uint8List(32), // 32-byte zero salt per Signal spec
     );
-    return secretKey.extractBytes();
+    final out = SecureMemory.ownedCopy(await secretKey.extractBytes());
+    secretKey.destroy();
+    // `SecretKey(km)` wrapped km without copying; it holds the DH outputs.
+    SecureMemory.zeroBytes(km);
+    return out;
   }
 
   /// Reconstruct a [SimpleKeyPair] from a base64-encoded [KeyPair].

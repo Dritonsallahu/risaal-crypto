@@ -9,6 +9,8 @@ library;
 
 import 'package:risaal_crypto/risaal_crypto.dart';
 
+import 'example_key_bundle_helper.dart';
+
 // In-memory storage for demonstration
 class InMemoryStorage implements CryptoSecureStorage {
   @override
@@ -28,6 +30,9 @@ class InMemoryStorage implements CryptoSecureStorage {
 
   @override
   Future<void> clearAll() async => _store.clear();
+
+  @override
+  Future<void> clearAccountScopedValues() => clearAll();
 }
 
 Future<void> main() async {
@@ -47,55 +52,29 @@ Future<void> main() async {
   final bob = SignalProtocolManager(secureStorage: bobStorage);
   final carol = SignalProtocolManager(secureStorage: carolStorage);
 
+  await alice.wipeForFreshRegistration();
+  await bob.wipeForFreshRegistration();
+  await carol.wipeForFreshRegistration();
   await alice.initialize();
   await bob.initialize();
   await carol.initialize();
 
   // Establish 1-to-1 sessions (Alice ↔ Bob, Alice ↔ Carol, Bob ↔ Carol)
   // This is required before we can distribute Sender Keys
-  final bobBundle = await bob.generateKeyBundle();
-  final carolBundle = await carol.generateKeyBundle();
-
-  // Alice establishes sessions with Bob and Carol
-  await alice.createSession(PreKeyBundle(
+  final bobBundle = await acceptInitialExampleGeneration(
+    bob,
     userId: 'bob-001',
     deviceId: 'bob-device-1',
-    identityKey: bobBundle['identityKey'] as String,
-    identitySigningKey: bobBundle['identitySigningKey'] as String,
-    signedPreKey: SignedPreKeyPublic(
-      keyId: (bobBundle['signedPreKey'] as Map)['keyId'] as int,
-      publicKey: (bobBundle['signedPreKey'] as Map)['publicKey'] as String,
-      signature: (bobBundle['signedPreKey'] as Map)['signature'] as String,
-    ),
-    oneTimePreKey: (bobBundle['oneTimePreKeys'] as List).isNotEmpty
-        ? OneTimePreKeyPublic(
-            keyId: ((bobBundle['oneTimePreKeys'] as List)[0] as Map)['keyId']
-                as int,
-            publicKey: ((bobBundle['oneTimePreKeys'] as List)[0]
-                as Map)['publicKey'] as String,
-          )
-        : null,
-  ));
-
-  await alice.createSession(PreKeyBundle(
+  );
+  final carolBundle = await acceptInitialExampleGeneration(
+    carol,
     userId: 'carol-001',
     deviceId: 'carol-device-1',
-    identityKey: carolBundle['identityKey'] as String,
-    identitySigningKey: carolBundle['identitySigningKey'] as String,
-    signedPreKey: SignedPreKeyPublic(
-      keyId: (carolBundle['signedPreKey'] as Map)['keyId'] as int,
-      publicKey: (carolBundle['signedPreKey'] as Map)['publicKey'] as String,
-      signature: (carolBundle['signedPreKey'] as Map)['signature'] as String,
-    ),
-    oneTimePreKey: (carolBundle['oneTimePreKeys'] as List).isNotEmpty
-        ? OneTimePreKeyPublic(
-            keyId: ((carolBundle['oneTimePreKeys'] as List)[0] as Map)['keyId']
-                as int,
-            publicKey: ((carolBundle['oneTimePreKeys'] as List)[0]
-                as Map)['publicKey'] as String,
-          )
-        : null,
-  ));
+  );
+
+  // Alice establishes sessions with Bob and Carol
+  await alice.createSession(bobBundle);
+  await alice.createSession(carolBundle);
 
   print('1-to-1 sessions established');
 

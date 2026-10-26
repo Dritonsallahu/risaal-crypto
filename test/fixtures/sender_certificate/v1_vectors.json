@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "domains": {
+    "serverSignature": "Risaal-SenderCert-v1\u0000"
+  },
+  "seeds": {
+    "serverSigningSeedHex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "senderSigningSeedHex": "0202020202020202020202020202020202020202020202020202020202020202"
+  },
+  "serverSigningKey": {
+    "keyId": "test-key-1",
+    "publicKey": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w="
+  },
+  "timestamp": 1760000500000,
+  "valid": {
+    "certificateObject": {
+      "expiresAt": 1760086400000,
+      "issuedAt": 1760000000000,
+      "keyId": "test-key-1",
+      "senderDeviceId": "device-1",
+      "senderId": "507f1f77bcf86cd799439011",
+      "senderIdentityKey": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=",
+      "senderSigningKey": "gTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=",
+      "v": 1
+    },
+    "certificate": "eyJleHBpcmVzQXQiOjE3NjAwODY0MDAwMDAsImlzc3VlZEF0IjoxNzYwMDAwMDAwMDAwLCJrZXlJZCI6InRlc3Qta2V5LTEiLCJzZW5kZXJEZXZpY2VJZCI6ImRldmljZS0xIiwic2VuZGVySWQiOiI1MDdmMWY3N2JjZjg2Y2Q3OTk0MzkwMTEiLCJzZW5kZXJJZGVudGl0eUtleSI6IkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVU9Iiwic2VuZGVyU2lnbmluZ0tleSI6ImdUbDNEcWg5RjE5V28xUm13MHgrek11TmlwRzA3amVpWGZZUFc0L0pzNVE9IiwidiI6MX0=",
+    "serverSignature": "AgkJ2Yj7w02IR2d8n2YZ3POMCp42SvxWbBhhVfa9hMUeKUzwfd2SxW9koQEob7zXT6dmRGjtfTr5j7j6Ts8sCQ=="
+  },
+  "negative": [
+    {
+      "name": "tampered-device-id",
+      "reason": "badServerSignature",
+      "certificate": "eyJleHBpcmVzQXQiOjE3NjAwODY0MDAwMDAsImlzc3VlZEF0IjoxNzYwMDAwMDAwMDAwLCJrZXlJZCI6InRlc3Qta2V5LTEiLCJzZW5kZXJEZXZpY2VJZCI6ImRldmljZS0yIiwic2VuZGVySWQiOiI1MDdmMWY3N2JjZjg2Y2Q3OTk0MzkwMTEiLCJzZW5kZXJJZGVudGl0eUtleSI6IkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVU9Iiwic2VuZGVyU2lnbmluZ0tleSI6ImdUbDNEcWg5RjE5V28xUm13MHgrek11TmlwRzA3amVpWGZZUFc0L0pzNVE9IiwidiI6MX0=",
+      "serverSignature": "AgkJ2Yj7w02IR2d8n2YZ3POMCp42SvxWbBhhVfa9hMUeKUzwfd2SxW9koQEob7zXT6dmRGjtfTr5j7j6Ts8sCQ=="
+    },
+    {
+      "name": "unknown-key-id",
+      "reason": "unknownKeyId",
+      "certificate": "eyJleHBpcmVzQXQiOjE3NjAwODY0MDAwMDAsImlzc3VlZEF0IjoxNzYwMDAwMDAwMDAwLCJrZXlJZCI6InRlc3Qta2V5LTkiLCJzZW5kZXJEZXZpY2VJZCI6ImRldmljZS0xIiwic2VuZGVySWQiOiI1MDdmMWY3N2JjZjg2Y2Q3OTk0MzkwMTEiLCJzZW5kZXJJZGVudGl0eUtleSI6IkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVU9Iiwic2VuZGVyU2lnbmluZ0tleSI6ImdUbDNEcWg5RjE5V28xUm13MHgrek11TmlwRzA3amVpWGZZUFc0L0pzNVE9IiwidiI6MX0=",
+      "serverSignature": "Ggi9X1FIYcYd/lNzsPMg67sFW7KsUGJNcGwC9lXdB/VPmphUB3kDAgdsgjWv4thumAhTZbTvgQnBL/u8GowDCA=="
+    },
+    {
+      "name": "expired",
+      "reason": "expired",
+      "certificate": "eyJleHBpcmVzQXQiOjE3MDAwODY0MDAwMDAsImlzc3VlZEF0IjoxNzAwMDAwMDAwMDAwLCJrZXlJZCI6InRlc3Qta2V5LTEiLCJzZW5kZXJEZXZpY2VJZCI6ImRldmljZS0xIiwic2VuZGVySWQiOiI1MDdmMWY3N2JjZjg2Y2Q3OTk0MzkwMTEiLCJzZW5kZXJJZGVudGl0eUtleSI6IkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVVGQlFVRkJRVUZCUVU9Iiwic2VuZGVyU2lnbmluZ0tleSI6ImdUbDNEcWg5RjE5V28xUm13MHgrek11TmlwRzA3amVpWGZZUFc0L0pzNVE9IiwidiI6MX0=",
+      "serverSignature": "ggrwBOtPUfBEADSXfGCv50yZBzcYjAWjYXXEn0HHDVdpTdKGa/JpEpQt13g6CrU+q/aaLwOBBNA63eAGRW6xAg=="
+    }
+  ]
+}

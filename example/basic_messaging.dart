@@ -12,6 +12,8 @@ library;
 
 import 'package:risaal_crypto/risaal_crypto.dart';
 
+import 'example_key_bundle_helper.dart';
+
 // In-memory storage for demonstration
 class InMemoryStorage implements CryptoSecureStorage {
   final _store = <String, String>{};
@@ -31,6 +33,9 @@ class InMemoryStorage implements CryptoSecureStorage {
 
   @override
   Future<void> clearAll() async => _store.clear();
+
+  @override
+  Future<void> clearAccountScopedValues() => clearAll();
 }
 
 Future<void> main() async {
@@ -48,39 +53,23 @@ Future<void> main() async {
   final bob = SignalProtocolManager(secureStorage: bobStorage);
 
   // Generate all key material (identity, signing, pre-keys, Kyber)
+  await alice.wipeForFreshRegistration();
+  await bob.wipeForFreshRegistration();
   final aliceIsNew = await alice.initialize(); // returns true on first run
   final bobIsNew = await bob.initialize();
   print('Alice new device: $aliceIsNew'); // true
   print('Bob new device: $bobIsNew'); // true
 
-  // ── Step 2: Upload key bundles to "server" ──────────────────────
-  // In production, POST these to /api/keys/upload
-  // ignore: unused_local_variable
-  final aliceBundle = await alice.generateKeyBundle();
-  final bobBundle = await bob.generateKeyBundle();
+  // ── Step 2: Upload and accept Bob's journal generation ──────────
+  // In production, the authenticated server returns the immutable receipt.
+  final bobPreKeyBundle = await acceptInitialExampleGeneration(
+    bob,
+    userId: 'bob-001',
+    deviceId: 'bob-device-1',
+  );
 
   // ── Step 3: Alice initiates a session with Bob ──────────────────
   // Alice fetches Bob's bundle from the server
-  final bobPreKeyBundle = PreKeyBundle(
-    userId: 'bob-001',
-    deviceId: 'bob-device-1',
-    identityKey: bobBundle['identityKey'] as String,
-    identitySigningKey: bobBundle['identitySigningKey'] as String,
-    signedPreKey: SignedPreKeyPublic(
-      keyId: (bobBundle['signedPreKey'] as Map)['keyId'] as int,
-      publicKey: (bobBundle['signedPreKey'] as Map)['publicKey'] as String,
-      signature: (bobBundle['signedPreKey'] as Map)['signature'] as String,
-    ),
-    oneTimePreKey: (bobBundle['oneTimePreKeys'] as List).isNotEmpty
-        ? OneTimePreKeyPublic(
-            keyId: ((bobBundle['oneTimePreKeys'] as List)[0] as Map)['keyId']
-                as int,
-            publicKey: ((bobBundle['oneTimePreKeys'] as List)[0]
-                as Map)['publicKey'] as String,
-          )
-        : null,
-  );
-
   await alice.createSession(bobPreKeyBundle);
   print('Session established (Alice -> Bob)');
 

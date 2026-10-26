@@ -27,6 +27,9 @@ class InMemoryStorage implements CryptoSecureStorage {
 
   @override
   Future<void> clearAll() async => _store.clear();
+
+  @override
+  Future<void> clearAccountScopedValues() => clearAll();
 }
 
 Future<void> main() async {
@@ -42,6 +45,8 @@ Future<void> main() async {
   final alice = SignalProtocolManager(secureStorage: aliceStorage);
   final bob = SignalProtocolManager(secureStorage: bobStorage);
 
+  await alice.wipeForFreshRegistration();
+  await bob.wipeForFreshRegistration();
   await alice.initialize();
   await bob.initialize();
 

@@ -1,0 +1,108 @@
+{
+  "description": "R4-L1 identity binding vectors (contracts/R4-L1-IDENTITY-BINDING.md). Synthetic test keys only. Generated from primitives and the contract layout, not from the implementation.",
+  "transcript": {
+    "routing": {
+      "bundleRevision": 4294967303,
+      "opkGeneration": 4294967301,
+      "opkSetDigest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "recipientSignedPreKeyId": 17,
+      "usedOneTimePreKeyId": 23,
+      "cryptoProtocolEpoch": 2,
+      "kemSuite": "ML-KEM-768",
+      "kemStandard": "FIPS203",
+      "kemWireVersion": 1,
+      "recipientKeyId": 19
+    },
+    "initiatorIdentityKey": "JE/juWPomd0pW6/84kjTUw86mnR5ugYwAmgOv+etrUk=",
+    "responderIdentityKey": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=",
+    "transcriptV1Hex": "0000001952495341414c5f50515844485f4f504b5f524f5554455f76310000000200000001000000070000000100000005000000200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00000011010000001700000013000000010000000a4d4c2d4b454d2d3736380000000746495053323033",
+    "transcriptV2Hex": "0000001952495341414c5f50515844485f4f504b5f524f5554455f76320000000200000001000000070000000100000005000000200123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00000011010000001700000013000000010000000a4d4c2d4b454d2d373638000000074649505332303300000020244fe3b963e899dd295baffce248d3530f3a9a7479ba063002680ebfe7adad490000002007a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c",
+    "transcriptV2Sha256": "4030cd36ad16392a1e6ad187f9a23326da360ffda7c32690b536f5fe9d0e6709"
+  },
+  "pqxdhResponder": {
+    "identityKeyPair": {
+      "publicKey": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=",
+      "privateKey": "AAIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eH2A="
+    },
+    "signedPreKey": {
+      "keyId": 17,
+      "keyPair": {
+        "publicKey": "WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns=",
+        "privateKey": "ICIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A="
+      },
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "createdAt": "2026-10-13T00:00:00.000Z"
+    },
+    "oneTimePreKey": {
+      "keyId": 23,
+      "keyPair": {
+        "publicKey": "ZLEBsdC+WocEvQePmJUAH8A+jp+VIvGI3RKNmEbUhGY=",
+        "privateKey": "QEJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2A="
+      }
+    },
+    "kyberKeyPair": {
+      "publicKey": "UyCJT7SWMjMt+1Y/YBNhTKYOMjcTjpQ8XBAvNxUAy+WviCyKEPaf5zROJNdCciZe/gisz4bCDxZkwMxcJ6ZRWjI1KtNqs7AiFQOkMkHHzwGiWUGfFQV8LDnEK6O99pyjHMXDQJgtkKM5Mto6Joma+ox0+2xOfbaU4jI950cjNkoxFdsUFccZY5M+thIEYfMl9pygO8uA7cGquXIj/NhDMokdl1QsAndXHVoj4SAeFKQ+EbVRl/oZA2kYylltgXTA+gUKzYPAVcwGVtC2D1weS9cYnbehWOOVAQXCzkC1X6Er4hdzK1sKjzFN6kKdyeEMN9oBN4ChMuJGB0AteAsytxdSLjyLGVZumgJYEnOjqMgq30qdVzTKW4mrLwDH3stWn2uE/DhALSUbI9MlfwRWkqaewxq3GeASKyGyuqRTbtGTvCIGMKU+9PBe6TnLaFyZIaluLNGeRbl2ynRMVfyHAvV5sIs/GSuu4MYxBiwUIaiIUao8b/hLQVKlnhRbScxyUTS0pxBm50dhpzQB9tV6ggnPWFKRZNa9egU5ZhA3QlgO/cxbZnMAgraaLzCynGS7THtjbZGLVOu/xQO0VBCcfWiYlHqNFLIWjXHIK8h0RoShKHYCHyBOUHXLjzCLHwJPdmhzFWFLPHMbMludy0RhybaARaeV5HOq1Oi+yEkH0dhr43mMW2EKJDVp4nultEx1m4cNj4NwfiZjIRJk+ILJtZcSqBC0fas9yLwto3REyhbHcAu6K9gZS2ADYpIDjeMx6LoDbpg2fqptkQCJBUIqrdwcB3RCEGY38/ohEFlXsKdpIFp6i8gkUVBwENl7h3Vw8pbBTOpIp6t9QTOtwHMnjkU3TASFuzHGN7uFfjBugoDPnPgAxwkCKFR8Dlmpx6eDFKmFtVy0fxunYDA33VdVBIga37l3dxyJHdJ8AnYv0Vst+TbE+HEBxfK90ZYfcYiwSrXHluIe4jdexGcZ5uALj/u6zLeD0UvAoadQWCVRL0dn4ctsZ/KZcei6qBZA1YJDZ9YPlRqarcVXfiS7P0GU1VN0pyx2tOQG8rmYsOEHCFReBSGuAP2ho6h6FOhE9ejPIIgttsl8evkMrVcMgrlXDxwZTNSfi0F3wZKNkHsFGIdYeOwKQYU4TEWkHgk/olBcEvd94/iv/+m+5IOb9CfNV0G3FvMe/5c3aMcCbuZyisNaVZHGWcoH5Ii5rua+p7VhIbqjtnx1LgXB07RzupWk63Ro/7Nflsq4EWpVZVgGVWMp5FI32oWyWPJRsveVFfsp3ubPoUPFUkxkXIBYpMiLnAXBA0a6SLkYXAI+XkYOe+OFZnCuVRGk8odWOugNc5axk3Ca0UHFb0ZwYCKjHyF1Q9Wue6xhrKAPb/AruPwmaSjIZtM5EEyRKsV8+PeqisB962u+zKeJ4nF80acY6LtY2iECpAgnRfCTYmGR+DdLb1xESxFxsPcH2BlEnsmsUJoPzbG9ADMqbuaTkRcm7Atq63J97oahTGw/TKE1/Ht2d9fGFQS14NiSCaFwOOZieRg4fym3NvMTtY3kblRzhVz1PHSUrSwfG6bj6vUw2l5Bpwg=",
+      "privateKey": "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",
+      "keyId": 19,
+      "cryptoProtocolEpoch": 2,
+      "kemSuite": "ML-KEM-768",
+      "kemStandard": "FIPS203",
+      "kemWireVersion": 1
+    },
+    "senderIdentityKey": "JE/juWPomd0pW6/84kjTUw86mnR5ugYwAmgOv+etrUk=",
+    "senderEphemeralKey": "iDGGuAC0HVzwQpaV2ps8xPMo680YSm5IL6V4wQPwbHc=",
+    "kyberCiphertext": "j8NJTxHLC9oVfr5BkroLIeAmNkzzMjfSBZYvGFdTA7eOp+gYQ0KCKotqI4paWhBj7xnQ5a00LcJgZNKRpCpXzGFQUNhaoOpHcp3Ytev4B51oYk4T8Jk+CEKxMszMQ/9aqEd2r7poTUoNTkAZWVVowBMx5sT8gPN0QxE3VH+cT4KA/rV8I32nYQ1bDLScfYLjJJLXAobGYCYdOOVXG35dlqw6p0Vi4ucPw6GjLx7guoCh4hJZjwhIMH5t/XPOD1C+phoAZ34XLNqxARmQsxnQG18HNGAgz3hVZq9BwvBm2T9qjwZSE2775+NTpo8dh24ptzSIgzfJMJep2NsqnQHQiTNSACQ5vE4zO4Q230bzo8ZDC4FEp1k4HcPXu4+hL8qyaPvfwDu8BFFYuRZKMI2s2K+w6EdQh+wDWOk+t7RdysTmqP+2An9YlJo4dyJlgoEPVPvzWTGn7J7e4WTFJ2q6SiwRZpjc3p70iTQMWozeomtX75r7IP43dRNVVw2pvSvz2jk5iDfmgmTmg+wT0bhQY8g5hasVlHa7S6xkSog8OH8voBsmTQn/nVtmjWPfoFGBrvtfL88QEl1fSAHBuOWS7ldRkO7PpF99OhJ6Aq6Lpw19ikeYqd2smLmtR7AW33QnCgs4S8zZqRQuTbRlccxOjmAEaoHsx+rBYhpQ4P8pLdtlCJpo9PXyfgzthA9/PpKa4YbH05bkykhfVqTkc+gnxVLQ0EFKFvqRVejeW4XE89k2LeO13O2ENY85LXKtwEBksILC2S9T80QC9TFUyXsPzaQbKRU6hF5G/EM2neXw/NgMf74jsldgxYbFq8M2CbwWcX//KrnRNSq2spRKJfJeRJQzkFmEfxNigrtc9bvqV/KV2bwcdvtYstBT+4cMIYdPNgmnWvehXQehrNsx82dWUKlTKSfF1MnQniyV7EGZhqJq2OmKkPmLbAxGqYhLiKkkhFiMe2zQWS9fB6bSzeSOoVMwS8tJNEdPJgzlvqqMUJZS+PsM/04A8WmBRyx6jl3eD3V3kcakVYbEklh56fPA54021vW+rV6EeG9YYcK5EzhyjmAQaYlMcXvfgo6/wYtD5cYctO59vPj5CDdTqYeyEboNzodgGC3BT+wXo8zAOBw0Dkp4XofU/v597P6cxWZzZmkd27+9wZKcUl+UScH0FY+Lvaoea68jQD+mVa/MjQ8qcfEa4VYMJlD3h2F2SoeHcr+ZD9wVqnzJo61TKHPMsy2G4zVu0CcHuCFkNbjap921mgUMgO7G1jFObkZurGRiPKscywt2QCAHb0JETp7n26fLcKdAJQW0kKW3JzavNlYTozASoX4zPMAeVBXK5mvL129sRbgG9nr2zt8qvgUhBUWkFTwCjoWBDXGFff9PqoecLljXlFG2/Q3/QSih+/w8HBWnV/780HlMkaS1uvJypjR848t91cUGUz1vvKU7CTQ=",
+    "routing": {
+      "bundleRevision": 4294967303,
+      "opkGeneration": 4294967301,
+      "opkSetDigest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "recipientSignedPreKeyId": 17,
+      "usedOneTimePreKeyId": 23,
+      "cryptoProtocolEpoch": 2,
+      "kemSuite": "ML-KEM-768",
+      "kemStandard": "FIPS203",
+      "kemWireVersion": 1,
+      "recipientKeyId": 19
+    },
+    "sharedSecretTranscriptV1Hex": "7cf19bb878a652b40321319d6f74b21abb700dd90b9a746dc469e9d3d89ae55f",
+    "sharedSecretTranscriptV2Hex": "9f865293a53b4ce51e978784cbd4de2c6f4c7568912b207f15a42bef7f1117fb"
+  },
+  "aad": {
+    "dhPublicKey": "rUOL+uMfbAk9YdQzklXqeYCSyfrdB7l4J/Swrp3ufBw=",
+    "messageNumber": 2,
+    "previousChainLength": 4,
+    "identityKeyA": "JE/juWPomd0pW6/84kjTUw86mnR5ugYwAmgOv+etrUk=",
+    "identityKeyB": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=",
+    "identityAdHex": "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c244fe3b963e899dd295baffce248d3530f3a9a7479ba063002680ebfe7adad49",
+    "aadV3Hex": "0000000f52495341414c5f44525f48445276320000004007a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c244fe3b963e899dd295baffce248d3530f3a9a7479ba063002680ebfe7adad490000000300000020ad438bfae31f6c093d61d4339255ea798092c9fadd07b97827f4b0ae9dee7c1c0000000200000004",
+    "aadV2Hex": "0000000f52495341414c5f44525f48445276310000000200000020ad438bfae31f6c093d61d4339255ea798092c9fadd07b97827f4b0ae9dee7c1c0000000200000004"
+  },
+  "ratchetV3": {
+    "receiverState": {
+      "v": 2,
+      "cryptoProtocolEpoch": 2,
+      "dhSendingKeyPair": "eyJwdWJsaWNLZXkiOiJTSnpydW5vV2JHR1lOZjRTN3R4WUhiL0JzMjNoRElNT1R3dkJ4SWMwaGtzPSIsInByaXZhdGVLZXkiOiI0T0xqNU9YbTUranA2dXZzN2U3djhQSHk4L1QxOXZmNCtmcjcvUDMrLzBBPSJ9",
+      "dhReceivingKey": "rUOL+uMfbAk9YdQzklXqeYCSyfrdB7l4J/Swrp3ufBw=",
+      "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "sendingChainKey": "",
+      "receivingChainKey": "wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+A=",
+      "sendMessageNumber": 0,
+      "receiveMessageNumber": 2,
+      "previousChainLength": 0,
+      "skippedKeys": {},
+      "skippedKeyAges": {},
+      "receivedMessages": [],
+      "remoteIdentityKey": "JE/juWPomd0pW6/84kjTUw86mnR5ugYwAmgOv+etrUk="
+    },
+    "localIdentityKey": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=",
+    "message": {
+      "dhPublicKey": "rUOL+uMfbAk9YdQzklXqeYCSyfrdB7l4J/Swrp3ufBw=",
+      "messageNumber": 2,
+      "previousChainLength": 4,
+      "ciphertext": "GmInAl7VQDiwSMQGKjs1i5bDYL9ksXxNNzlV5PEGQP0sk4e91OY+3hUOsY9mjbOG0VQLEXGGhyfsngXEaXcyd2tRfL5S+2o4qHsASZJjUBTvjvRqXf0EMfWKJfc7eJvHPRxLQz9xsZNqsOZ8Dpu0HBy8xNbH+tAQLkXvCQjROrnyKiOQc+2K2eKN/h35oqevzhAxONf5GFdAgItiDGKtvnyjgR8Bz8l2YUtEPCjHVuhzMSWjgCX+kF3/o9pVc2O5cVXQd9PlKE7xEgcORWdHjshe5WxPNOsCkEnpnmF7QOdic+qZtbUJhoghINWpoF68ngnHCgDuWY32iCa2MA2sNi8k17Rz2fF5jPOe0m0/n68=",
+      "nonce": "tczVQByepOAD/WJH",
+      "version": 3
+    },
+    "plaintext": "R4-L1 golden v3 message"
+  }
+}

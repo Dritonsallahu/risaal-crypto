@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:risaal_crypto/src/double_ratchet.dart';
 import 'package:risaal_crypto/src/key_helper.dart';
@@ -113,20 +114,86 @@ void main() {
     });
   });
 
+  // ── R4-M1: zeroBytes on library-owned bytes ─────────────────────────
+
+  group('zeroBytes on library-owned bytes', () {
+    Future<List<int>> rawSharedSecret() async {
+      final x25519 = X25519();
+      final kp = await x25519.newKeyPair();
+      final peer = await x25519.newKeyPair();
+      final secret = await x25519.sharedSecretKey(
+        keyPair: kp,
+        remotePublicKey: await peer.extractPublicKey(),
+      );
+      return secret.extractBytes();
+    }
+
+    test(
+      'cryptography extractBytes() output cannot be zeroed in place',
+      () async {
+        final raw = await rawSharedSecret();
+        expect(SecureMemory.zeroBytes(raw), isFalse);
+        expect(raw.any((b) => b != 0), isTrue);
+      },
+    );
+
+    test('ownedCopy of library bytes is zeroed for real', () async {
+      final raw = await rawSharedSecret();
+      final owned = SecureMemory.ownedCopy(raw);
+      expect(owned, equals(raw));
+      expect(SecureMemory.zeroBytes(owned), isTrue);
+      expect(owned, everyElement(0));
+      // The library copy is untouched (not aliased with the owned copy).
+      expect(raw.any((b) => b != 0), isTrue);
+    });
+
+    test('zeroBytes reports mutable vs unmodifiable lists', () {
+      expect(SecureMemory.zeroBytes(Uint8List.fromList([1, 2, 3])), isTrue);
+      final fixed = List<int>.unmodifiable([1, 2, 3]);
+      expect(SecureMemory.zeroBytes(fixed), isFalse);
+      expect(fixed, equals([1, 2, 3]));
+    });
+
+    test('zeroBytes on a destroyed SecretKeyData returns false', () {
+      final key = SecretKeyData(Uint8List.fromList([9, 9, 9]));
+      final view = key.bytes;
+      key.destroy();
+      expect(SecureMemory.zeroBytes(view), isFalse);
+    });
+
+    test('HMAC-SHA256 chain/message keys (Mac.bytes) are mutable', () async {
+      final mac = await Hmac.sha256().calculateMac([
+        0x01,
+      ], secretKey: SecretKey(List<int>.filled(32, 7)));
+      expect(SecureMemory.zeroBytes(mac.bytes), isTrue);
+      expect(mac.bytes, everyElement(0));
+    });
+
+    test('ML-KEM shared secrets are package-owned (mutable)', () {
+      final kem = SignalKeyHelper.generateKyberKeyPair();
+      final (ct, ss) = SignalKeyHelper.kyberEncapsulate(kem.publicKey);
+      final decapsulated = SignalKeyHelper.kyberDecapsulate(kem.privateKey, ct);
+      expect(decapsulated, equals(ss));
+      expect(SecureMemory.zeroBytes(ss), isTrue);
+      expect(SecureMemory.zeroBytes(decapsulated), isTrue);
+    });
+  });
+
   // ── Double Ratchet DH shared secret zeroing ─────────────────────────
 
   group('Double Ratchet memory hygiene', () {
     test(
-        'encrypt/decrypt completes without error (DH intermediaries zeroed internally)',
-        () async {
-      final (alice, bob) = await _createRatchetSession();
+      'encrypt/decrypt completes without error (DH intermediaries zeroed internally)',
+      () async {
+        final (alice, bob) = await _createRatchetSession();
 
-      // Single message — exercises encrypt path with chain key zeroing
-      final encrypted = await alice.encrypt(utf8.encode('Test message'));
-      final decrypted = await bob.decrypt(encrypted);
+        // Single message — exercises encrypt path with chain key zeroing
+        final encrypted = await alice.encrypt(utf8.encode('Test message'));
+        final decrypted = await bob.decrypt(encrypted);
 
-      expect(utf8.decode(decrypted), equals('Test message'));
-    });
+        expect(utf8.decode(decrypted), equals('Test message'));
+      },
+    );
 
     test('bidirectional exchange exercises DH ratchet step zeroing', () async {
       final (alice, bob) = await _createRatchetSession();
@@ -216,8 +283,9 @@ void main() {
       // Store recipient copy
       final bobStorage = FakeSecureStorage();
       final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
-      final bobSenderKeyManager =
-          SenderKeyManager(cryptoStorage: bobCryptoStorage);
+      final bobSenderKeyManager = SenderKeyManager(
+        cryptoStorage: bobCryptoStorage,
+      );
       await bobStorage.write(key: 'user_id', value: 'bob-id');
       await bobSenderKeyManager.processSenderKeyDistribution(
         'group-1',
@@ -239,39 +307,44 @@ void main() {
       expect(utf8.decode(decrypted), equals('Group message'));
     });
 
-    test('multiple group messages exercise chain key forward secrecy zeroing',
-        () async {
-      final storage = FakeSecureStorage();
-      final cryptoStorage = CryptoStorage(secureStorage: storage);
-      final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
+    test(
+      'multiple group messages exercise chain key forward secrecy zeroing',
+      () async {
+        final storage = FakeSecureStorage();
+        final cryptoStorage = CryptoStorage(secureStorage: storage);
+        final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
 
-      await storage.write(key: 'user_id', value: 'alice-id');
+        await storage.write(key: 'user_id', value: 'alice-id');
 
-      final distribution = await senderKeyManager.generateSenderKey('group-2');
+        final distribution = await senderKeyManager.generateSenderKey(
+          'group-2',
+        );
 
-      final bobStorage = FakeSecureStorage();
-      final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
-      final bobSenderKeyManager =
-          SenderKeyManager(cryptoStorage: bobCryptoStorage);
-      await bobStorage.write(key: 'user_id', value: 'bob-id');
-      await bobSenderKeyManager.processSenderKeyDistribution(
-        'group-2',
-        'alice-id',
-        distribution,
-      );
-
-      // Send 5 messages — each one zeroes the old chain key
-      for (var i = 0; i < 5; i++) {
-        final msg = utf8.encode('Message $i');
-        final encrypted = await senderKeyManager.encrypt('group-2', msg);
-        final decrypted = await bobSenderKeyManager.decrypt(
+        final bobStorage = FakeSecureStorage();
+        final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
+        final bobSenderKeyManager = SenderKeyManager(
+          cryptoStorage: bobCryptoStorage,
+        );
+        await bobStorage.write(key: 'user_id', value: 'bob-id');
+        await bobSenderKeyManager.processSenderKeyDistribution(
           'group-2',
           'alice-id',
-          encrypted,
+          distribution,
         );
-        expect(utf8.decode(decrypted), equals('Message $i'));
-      }
-    });
+
+        // Send 5 messages — each one zeroes the old chain key
+        for (var i = 0; i < 5; i++) {
+          final msg = utf8.encode('Message $i');
+          final encrypted = await senderKeyManager.encrypt('group-2', msg);
+          final decrypted = await bobSenderKeyManager.decrypt(
+            'group-2',
+            'alice-id',
+            encrypted,
+          );
+          expect(utf8.decode(decrypted), equals('Message $i'));
+        }
+      },
+    );
 
     test('skipped iteration fast-forward exercises zeroing', () async {
       final storage = FakeSecureStorage();
@@ -284,8 +357,9 @@ void main() {
 
       final bobStorage = FakeSecureStorage();
       final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
-      final bobSenderKeyManager =
-          SenderKeyManager(cryptoStorage: bobCryptoStorage);
+      final bobSenderKeyManager = SenderKeyManager(
+        cryptoStorage: bobCryptoStorage,
+      );
       await bobStorage.write(key: 'user_id', value: 'bob-id');
       await bobSenderKeyManager.processSenderKeyDistribution(
         'group-3',
@@ -311,9 +385,17 @@ void main() {
       );
       expect(utf8.decode(dec3), equals('Third'));
 
-      // Messages 1 and 2 are now stale (behind stored iteration)
-      // They should fail with a replay error
+      // Messages 1 and 2 were skipped over, and their keys were retained, so
+      // they still read — the relay controls delivery order, and rejecting an
+      // earlier message destroyed it rather than delaying it. Reading consumes
+      // the retained key, so the SECOND attempt is a genuine replay and fails.
       expect(
+        utf8.decode(
+          await bobSenderKeyManager.decrypt('group-3', 'alice-id', enc1),
+        ),
+        equals('First'),
+      );
+      await expectLater(
         () => bobSenderKeyManager.decrypt('group-3', 'alice-id', enc1),
         throwsA(isA<StateError>()),
       );
@@ -362,71 +444,77 @@ void main() {
 
   group('SecretKey corruption regression (v0.1.1)', () {
     test(
-        'zeroing original bytes does not corrupt Double Ratchet encrypt/decrypt',
-        () async {
-      // Regression: Before the fix, SecretKey(keyBytes) stored a reference.
-      // SecureMemory.zeroBytes(keyBytes) then zeroed the key inside the
-      // SecretKey, causing SecretBoxAuthenticationError on decrypt.
-      // Fix: SecretKey(List<int>.from(keyBytes)) creates a defensive copy.
+      'zeroing original bytes does not corrupt Double Ratchet encrypt/decrypt',
+      () async {
+        // Regression: Before the fix, SecretKey(keyBytes) stored a reference.
+        // SecureMemory.zeroBytes(keyBytes) then zeroed the key inside the
+        // SecretKey, causing SecretBoxAuthenticationError on decrypt.
+        // Fix: SecretKey(List<int>.from(keyBytes)) creates a defensive copy.
 
-      final (alice, bob) = await _createRatchetSession();
+        final (alice, bob) = await _createRatchetSession();
 
-      // Multiple messages to exercise chain key advancement
-      for (var i = 0; i < 5; i++) {
-        final msg = utf8.encode('Regression check message $i');
-        final encrypted = await alice.encrypt(msg);
-        final decrypted = await bob.decrypt(encrypted);
-        expect(utf8.decode(decrypted), equals('Regression check message $i'));
-      }
+        // Multiple messages to exercise chain key advancement
+        for (var i = 0; i < 5; i++) {
+          final msg = utf8.encode('Regression check message $i');
+          final encrypted = await alice.encrypt(msg);
+          final decrypted = await bob.decrypt(encrypted);
+          expect(utf8.decode(decrypted), equals('Regression check message $i'));
+        }
 
-      // Bidirectional to exercise DH ratchet step
-      for (var i = 0; i < 3; i++) {
-        final encBA = await bob.encrypt(utf8.encode('B->A $i'));
-        final decBA = await alice.decrypt(encBA);
-        expect(utf8.decode(decBA), equals('B->A $i'));
+        // Bidirectional to exercise DH ratchet step
+        for (var i = 0; i < 3; i++) {
+          final encBA = await bob.encrypt(utf8.encode('B->A $i'));
+          final decBA = await alice.decrypt(encBA);
+          expect(utf8.decode(decBA), equals('B->A $i'));
 
-        final encAB = await alice.encrypt(utf8.encode('A->B $i'));
-        final decAB = await bob.decrypt(encAB);
-        expect(utf8.decode(decAB), equals('A->B $i'));
-      }
-    });
+          final encAB = await alice.encrypt(utf8.encode('A->B $i'));
+          final decAB = await bob.decrypt(encAB);
+          expect(utf8.decode(decAB), equals('A->B $i'));
+        }
+      },
+    );
 
-    test('zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
-        () async {
-      // Same regression but for SenderKeyManager which also uses
-      // SecretKey(List<int>.from(chainKey)) after the fix.
+    test(
+      'zeroing original bytes does not corrupt Sender Key encrypt/decrypt',
+      () async {
+        // Same regression but for SenderKeyManager which also uses
+        // SecretKey(List<int>.from(chainKey)) after the fix.
 
-      final storage = FakeSecureStorage();
-      final cryptoStorage = CryptoStorage(secureStorage: storage);
-      final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
-      await storage.write(key: 'user_id', value: 'alice-id');
+        final storage = FakeSecureStorage();
+        final cryptoStorage = CryptoStorage(secureStorage: storage);
+        final senderKeyManager = SenderKeyManager(cryptoStorage: cryptoStorage);
+        await storage.write(key: 'user_id', value: 'alice-id');
 
-      final distribution =
-          await senderKeyManager.generateSenderKey('regression-group');
+        final distribution = await senderKeyManager.generateSenderKey(
+          'regression-group',
+        );
 
-      final bobStorage = FakeSecureStorage();
-      final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
-      final bobSKM = SenderKeyManager(cryptoStorage: bobCryptoStorage);
-      await bobStorage.write(key: 'user_id', value: 'bob-id');
-      await bobSKM.processSenderKeyDistribution(
-        'regression-group',
-        'alice-id',
-        distribution,
-      );
-
-      // Multiple messages to exercise chain key zeroing + key derivation
-      for (var i = 0; i < 10; i++) {
-        final msg = utf8.encode('Sender key regression $i');
-        final encrypted =
-            await senderKeyManager.encrypt('regression-group', msg);
-        final decrypted = await bobSKM.decrypt(
+        final bobStorage = FakeSecureStorage();
+        final bobCryptoStorage = CryptoStorage(secureStorage: bobStorage);
+        final bobSKM = SenderKeyManager(cryptoStorage: bobCryptoStorage);
+        await bobStorage.write(key: 'user_id', value: 'bob-id');
+        await bobSKM.processSenderKeyDistribution(
           'regression-group',
           'alice-id',
-          encrypted,
+          distribution,
         );
-        expect(utf8.decode(decrypted), equals('Sender key regression $i'));
-      }
-    });
+
+        // Multiple messages to exercise chain key zeroing + key derivation
+        for (var i = 0; i < 10; i++) {
+          final msg = utf8.encode('Sender key regression $i');
+          final encrypted = await senderKeyManager.encrypt(
+            'regression-group',
+            msg,
+          );
+          final decrypted = await bobSKM.decrypt(
+            'regression-group',
+            'alice-id',
+            encrypted,
+          );
+          expect(utf8.decode(decrypted), equals('Sender key regression $i'));
+        }
+      },
+    );
   });
 
   // -- RatchetState.wipe() zeros Uint8List key fields ---------------------
@@ -496,9 +584,7 @@ void main() {
         sendMessageNumber: 5,
         receiveMessageNumber: 3,
         previousChainLength: 2,
-        skippedKeys: {
-          'key1:0': Uint8List.fromList(List.filled(32, 0x56)),
-        },
+        skippedKeys: {'key1:0': Uint8List.fromList(List.filled(32, 0x56))},
         receivedMessages: {'msg1', 'msg2'},
       );
 
@@ -514,8 +600,10 @@ void main() {
       expect(restored.receiveMessageNumber, 3);
       expect(restored.previousChainLength, 2);
       expect(restored.skippedKeys.length, 1);
-      expect(restored.skippedKeys['key1:0'],
-          equals(Uint8List.fromList(List.filled(32, 0x56))));
+      expect(
+        restored.skippedKeys['key1:0'],
+        equals(Uint8List.fromList(List.filled(32, 0x56))),
+      );
       expect(restored.receivedMessages, {'msg1', 'msg2'});
     });
   });

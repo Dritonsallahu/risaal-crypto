@@ -3,61 +3,30 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cryptography/cryptography.dart' hide KeyPair;
 
 import 'package:risaal_crypto/src/double_ratchet.dart';
-import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/session_reset_errors.dart';
+import 'package:risaal_crypto/src/session_errors.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 
+import 'helpers/crypto_test_fixtures.dart';
 import 'helpers/fake_secure_storage.dart';
 
 // ── Helper Functions ───────────────────────────────────────────────
 
-PreKeyBundle _bundleFromMap(
-  Map<String, dynamic> bundle, {
-  required String userId,
-  required String deviceId,
-}) {
-  final signedPreKey = bundle['signedPreKey'] as Map<String, dynamic>;
-  final oneTimePreKeys = bundle['oneTimePreKeys'] as List<dynamic>;
-  return PreKeyBundle(
-    userId: userId,
-    deviceId: deviceId,
-    identityKey: bundle['identityKey'] as String,
-    identitySigningKey: bundle['identitySigningKey'] as String,
-    signedPreKey: SignedPreKeyPublic(
-      keyId: signedPreKey['keyId'] as int,
-      publicKey: signedPreKey['publicKey'] as String,
-      signature: signedPreKey['signature'] as String,
-    ),
-    oneTimePreKey: oneTimePreKeys.isNotEmpty
-        ? OneTimePreKeyPublic(
-            keyId:
-                (oneTimePreKeys.first as Map<String, dynamic>)['keyId'] as int,
-            publicKey: (oneTimePreKeys.first
-                as Map<String, dynamic>)['publicKey'] as String,
-          )
-        : null,
-    kyberPreKey: bundle.containsKey('kyberPreKey')
-        ? KyberPreKeyPublic(
-            keyId:
-                (bundle['kyberPreKey'] as Map<String, dynamic>)['keyId'] as int,
-            publicKey: (bundle['kyberPreKey']
-                as Map<String, dynamic>)['publicKey'] as String,
-          )
-        : null,
-  );
-}
-
 Future<
-    ({
-      SignalProtocolManager alice,
-      FakeSecureStorage aliceStorage,
-      SignalProtocolManager bob,
-      FakeSecureStorage bobStorage,
-    })> _createFullSession() async {
+  ({
+    SignalProtocolManager alice,
+    FakeSecureStorage aliceStorage,
+    SignalProtocolManager bob,
+    FakeSecureStorage bobStorage,
+  })
+>
+_createFullSession() async {
   final aliceStorage = FakeSecureStorage();
   final bobStorage = FakeSecureStorage();
   final alice = SignalProtocolManager(secureStorage: aliceStorage);
   final bob = SignalProtocolManager(secureStorage: bobStorage);
+  await alice.wipeForFreshRegistration();
+  await bob.wipeForFreshRegistration();
   await alice.initialize();
   await bob.initialize();
 
@@ -66,9 +35,8 @@ Future<
   await bobStorage.write(key: 'user_id', value: 'bob-id');
   await bobStorage.write(key: 'device_id', value: 'bob-device');
 
-  final bobBundle = await bob.generateKeyBundle();
-  final bundle = _bundleFromMap(
-    bobBundle,
+  final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(bob);
+  final bundle = acceptedBob.consumerBundle(
     userId: 'bob-id',
     deviceId: 'bob-device',
   );
@@ -125,15 +93,14 @@ void main() {
         final tamperedEnvelope = Map<String, dynamic>.from(envelope);
         tamperedEnvelope['message'] = tamperedMessage;
 
-        // Decryption should fail (AES-GCM MAC verification)
-        // Note: The auto-reset mechanism wraps the error in SessionResetError
+        // Decryption should fail without deleting the established session.
         expect(
           () => session.bob.decryptMessage(
             'alice-id',
             'alice-device',
             tamperedEnvelope,
           ),
-          throwsA(isA<SessionResetError>()),
+          throwsA(isA<MessageAuthenticationError>()),
         );
       });
 
@@ -167,7 +134,7 @@ void main() {
             'alice-device',
             tamperedEnvelope,
           ),
-          throwsA(isA<SessionResetError>()),
+          throwsA(isA<MessageAuthenticationError>()),
         );
       });
 
@@ -202,7 +169,8 @@ void main() {
             tamperedEnvelope,
           ),
           throwsA(
-              anything), // Can throw various errors depending on DH/AES failure
+            anything,
+          ), // Can throw various errors depending on DH/AES failure
         );
       });
 
@@ -249,8 +217,10 @@ void main() {
         final ciphertextB64 = message['ciphertext'] as String;
         final ciphertextBytes = base64Decode(ciphertextB64);
 
-        final truncated =
-            ciphertextBytes.sublist(0, ciphertextBytes.length - 10);
+        final truncated = ciphertextBytes.sublist(
+          0,
+          ciphertextBytes.length - 10,
+        );
         final truncatedCiphertext = base64Encode(truncated);
 
         final tamperedMessage = Map<String, dynamic>.from(message);
@@ -294,11 +264,8 @@ void main() {
         // Second decryption of the same envelope should fail
         // (ratchet has advanced past that message number)
         expect(
-          () => session.bob.decryptMessage(
-            'alice-id',
-            'alice-device',
-            envelope,
-          ),
+          () =>
+              session.bob.decryptMessage('alice-id', 'alice-device', envelope),
           throwsA(anything),
         );
       });
@@ -309,14 +276,16 @@ void main() {
         // Create a third party (Carol)
         final carolStorage = FakeSecureStorage();
         final carol = SignalProtocolManager(secureStorage: carolStorage);
+        await carol.wipeForFreshRegistration();
         await carol.initialize();
         await carolStorage.write(key: 'user_id', value: 'carol-id');
         await carolStorage.write(key: 'device_id', value: 'carol-device');
 
         // Establish a session between Alice and Carol
-        final carolBundle = await carol.generateKeyBundle();
-        final bundle = _bundleFromMap(
-          carolBundle,
+        final acceptedCarol = await CryptoTestFixtures.acceptInitialGeneration(
+          carol,
+        );
+        final bundle = acceptedCarol.consumerBundle(
           userId: 'carol-id',
           deviceId: 'carol-device',
         );
@@ -339,11 +308,7 @@ void main() {
 
         // Carol cannot decrypt it (different session, different keys)
         expect(
-          () => carol.decryptMessage(
-            'alice-id',
-            'alice-device',
-            bobEnvelope,
-          ),
+          () => carol.decryptMessage('alice-id', 'alice-device', bobEnvelope),
           throwsA(anything),
         );
       });
@@ -548,13 +513,15 @@ void main() {
 
         final carolStorage = FakeSecureStorage();
         final carol = SignalProtocolManager(secureStorage: carolStorage);
+        await carol.wipeForFreshRegistration();
         await carol.initialize();
         await carolStorage.write(key: 'user_id', value: 'carol-id');
         await carolStorage.write(key: 'device_id', value: 'carol-device');
 
-        final carolBundle = await carol.generateKeyBundle();
-        final bundle = _bundleFromMap(
-          carolBundle,
+        final acceptedCarol = await CryptoTestFixtures.acceptInitialGeneration(
+          carol,
+        );
+        final bundle = acceptedCarol.consumerBundle(
           userId: 'carol-id',
           deviceId: 'carol-device',
         );
@@ -585,11 +552,7 @@ void main() {
 
         // Carol cannot decrypt it (different session, different keys)
         expect(
-          () => carol.decryptMessage(
-            'alice-id',
-            'alice-device',
-            bobMsg,
-          ),
+          () => carol.decryptMessage('alice-id', 'alice-device', bobMsg),
           throwsA(anything),
         );
       });
@@ -628,50 +591,60 @@ void main() {
         expect(plaintext, equals('after wipe'));
       });
 
-      test('removeSession prevents future encryption to that recipient',
-          () async {
-        final session = await _createFullSession();
+      test(
+        'removeSession prevents future encryption to that recipient',
+        () async {
+          final session = await _createFullSession();
 
-        // Verify session exists
-        final hasSessionBefore = await session.alice.hasSession(
-          'bob-id',
-          'bob-device',
-        );
-        expect(hasSessionBefore, isTrue);
-
-        // Remove the session
-        await session.alice.removeSession('bob-id', 'bob-device');
-
-        // Verify session is gone
-        final hasSessionAfter = await session.alice.hasSession(
-          'bob-id',
-          'bob-device',
-        );
-        expect(hasSessionAfter, isFalse);
-
-        // Attempting to encrypt should throw StateError (no session)
-        expect(
-          () => session.alice.encryptMessage(
+          // Verify session exists
+          final hasSessionBefore = await session.alice.hasSession(
             'bob-id',
             'bob-device',
-            'should fail',
-          ),
-          throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              contains('No session found'),
+          );
+          expect(hasSessionBefore, isTrue);
+
+          // Remove the session
+          await session.alice.removeSession('bob-id', 'bob-device');
+
+          // Verify session is gone
+          final hasSessionAfter = await session.alice.hasSession(
+            'bob-id',
+            'bob-device',
+          );
+          expect(hasSessionAfter, isFalse);
+
+          // Attempting to encrypt should throw StateError (no session)
+          expect(
+            () => session.alice.encryptMessage(
+              'bob-id',
+              'bob-device',
+              'should fail',
             ),
-          ),
-        );
-      });
+            throwsA(
+              isA<StateError>().having(
+                (e) => e.message,
+                'message',
+                contains('No session found'),
+              ),
+            ),
+          );
+          // Typed: callers read the peer instead of parsing the text.
+          await expectLater(
+            session.alice.encryptMessage('bob-id', 'bob-device', 'x'),
+            throwsA(
+              isA<NoSessionError>()
+                  .having((e) => e.peerId, 'peerId', 'bob-id')
+                  .having((e) => e.deviceId, 'deviceId', 'bob-device'),
+            ),
+          );
+        },
+      );
     });
 
     // ── Group 7: Identity Key Verification ────────────────────────────
 
     group('Identity Key Verification', () {
-      test('Session with wrong identity key fails safety number check',
-          () async {
+      test('Session with wrong identity key fails safety number check', () async {
         final session = await _createFullSession();
 
         // Get Alice and Bob's identity keys
@@ -691,6 +664,7 @@ void main() {
         // Create a fake third party with different identity
         final fakeStorage = FakeSecureStorage();
         final fake = SignalProtocolManager(secureStorage: fakeStorage);
+        await fake.wipeForFreshRegistration();
         await fake.initialize();
         final fakeIdentity = await fake.getIdentityPublicKey();
 
@@ -723,32 +697,38 @@ void main() {
         };
         expect(
           () => EncryptedMessage.fromJson(json),
-          throwsA(isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            contains('exceeds maximum'),
-          )),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('exceeds maximum'),
+            ),
+          ),
         );
       });
 
-      test('message with previousChainLength > 100000 throws FormatException',
-          () {
-        final json = {
-          'dhPublicKey': 'someKey',
-          'messageNumber': 5,
-          'previousChainLength': 100001,
-          'ciphertext': 'dGVzdA==',
-          'nonce': 'bm9uY2U=',
-        };
-        expect(
-          () => EncryptedMessage.fromJson(json),
-          throwsA(isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            contains('exceeds maximum'),
-          )),
-        );
-      });
+      test(
+        'message with previousChainLength > 100000 throws FormatException',
+        () {
+          final json = {
+            'dhPublicKey': 'someKey',
+            'messageNumber': 5,
+            'previousChainLength': 100001,
+            'ciphertext': 'dGVzdA==',
+            'nonce': 'bm9uY2U=',
+          };
+          expect(
+            () => EncryptedMessage.fromJson(json),
+            throwsA(
+              isA<FormatException>().having(
+                (e) => e.message,
+                'message',
+                contains('exceeds maximum'),
+              ),
+            ),
+          );
+        },
+      );
     });
   });
 }

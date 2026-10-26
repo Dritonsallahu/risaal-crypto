@@ -1,6 +1,6 @@
-# Vulnerability Disclosure Rewards (Bug Bounty Policy)
+# Vulnerability Disclosure Policy
 
-`risaal_crypto` accepts responsible vulnerability reports and offers discretionary rewards for impactful findings.
+`risaal_crypto` welcomes responsible vulnerability reports. **There is currently no paid bug bounty**; see Program Status below.
 
 ## Scope
 
@@ -15,20 +15,25 @@ Out of scope:
 - Denial-of-service requiring unrealistic resources
 - Issues only affecting unsupported versions
 
-## Reward Bands (Discretionary)
-
-- Critical: up to $5,000
-- High: up to $2,000
-- Medium: up to $750
-- Low: up to $250
-
-Final reward depends on impact, exploitability, report quality, and novelty.
-
 ## Disclosure Process
 
 - Report privately to `security@risaal.org`.
 - Follow `SECURITY.md` response expectations and coordinated disclosure policy.
 - Do not publish exploit details before coordinated release.
+
+## Program Status
+
+**No monetary rewards are offered at this time.** Risaal is in pre-release
+hardening, and rewards will only begin once the Risaal application reaches
+stable, live production. Terms will be published at https://risaal.org/security
+when that happens.
+
+Until then, every report is:
+
+- acknowledged within 72 hours,
+- triaged against the current source (reports against an older published version
+  are checked for whether the current code is still affected), and
+- credited in the resulting advisory and changelog, with the reporter's consent.
 
 ## Safe Harbor
 

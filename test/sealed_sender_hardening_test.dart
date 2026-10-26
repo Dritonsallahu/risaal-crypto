@@ -325,34 +325,36 @@ void main() {
       expect(seenNonces.length, 2);
     });
 
-    test('fresh seenNonces set allows same envelope (no cross-contamination)',
-        () async {
-      final senderKp = await SignalKeyHelper.generateX25519KeyPair();
-      final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
+    test(
+      'fresh seenNonces set allows same envelope (no cross-contamination)',
+      () async {
+        final senderKp = await SignalKeyHelper.generateX25519KeyPair();
+        final recipientKp = await SignalKeyHelper.generateX25519KeyPair();
 
-      final sealed = await SealedSenderEnvelope.seal(
-        senderId: 'alice',
-        senderDeviceId: 'dev-1',
-        senderIdentityKey: senderKp.publicKey,
-        encryptedMessage: {'data': 'test'},
-        recipientIdentityPublicKey: recipientKp.publicKey,
-      );
+        final sealed = await SealedSenderEnvelope.seal(
+          senderId: 'alice',
+          senderDeviceId: 'dev-1',
+          senderIdentityKey: senderKp.publicKey,
+          encryptedMessage: {'data': 'test'},
+          recipientIdentityPublicKey: recipientKp.publicKey,
+        );
 
-      // Two independent seenNonces sets — same envelope should succeed in each
-      final content1 = await SealedSenderEnvelope.unseal(
-        sealedEnvelope: sealed,
-        recipientIdentityKeyPair: recipientKp,
-        seenNonces: <String>{},
-      );
-      expect(content1.senderId, 'alice');
+        // Two independent seenNonces sets — same envelope should succeed in each
+        final content1 = await SealedSenderEnvelope.unseal(
+          sealedEnvelope: sealed,
+          recipientIdentityKeyPair: recipientKp,
+          seenNonces: <String>{},
+        );
+        expect(content1.senderId, 'alice');
 
-      final content2 = await SealedSenderEnvelope.unseal(
-        sealedEnvelope: sealed,
-        recipientIdentityKeyPair: recipientKp,
-        seenNonces: <String>{},
-      );
-      expect(content2.senderId, 'alice');
-    });
+        final content2 = await SealedSenderEnvelope.unseal(
+          sealedEnvelope: sealed,
+          recipientIdentityKeyPair: recipientKp,
+          seenNonces: <String>{},
+        );
+        expect(content2.senderId, 'alice');
+      },
+    );
   });
 
   // ── Server token validation ─────────────────────────────────────────

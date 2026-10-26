@@ -20,30 +20,32 @@ void main() {
       bus.dispose();
     });
 
-    test('emits anomaly on signature failure spike exceeding threshold',
-        () async {
-      detector = SecurityAnomalyDetector(
-        eventBus: bus,
-        signatureFailureThreshold: 3,
-        signatureFailureWindow: const Duration(minutes: 10),
-      );
+    test(
+      'emits anomaly on signature failure spike exceeding threshold',
+      () async {
+        detector = SecurityAnomalyDetector(
+          eventBus: bus,
+          signatureFailureThreshold: 3,
+          signatureFailureWindow: const Duration(minutes: 10),
+        );
 
-      final anomalies = <SecurityEvent>[];
-      bus.events
-          .where((e) => e.type == SecurityEventType.anomalyDetected)
-          .listen(anomalies.add);
+        final anomalies = <SecurityEvent>[];
+        bus.events
+            .where((e) => e.type == SecurityEventType.anomalyDetected)
+            .listen(anomalies.add);
 
-      // Emit 3 signature failures (meets threshold)
-      for (var i = 0; i < 3; i++) {
-        bus.emitType(SecurityEventType.signatureVerificationFailed);
+        // Emit 3 signature failures (meets threshold)
+        for (var i = 0; i < 3; i++) {
+          bus.emitType(SecurityEventType.signatureVerificationFailed);
+          await Future<void>.delayed(Duration.zero);
+        }
         await Future<void>.delayed(Duration.zero);
-      }
-      await Future<void>.delayed(Duration.zero);
 
-      expect(anomalies, hasLength(1));
-      expect(anomalies.first.metadata['pattern'], 'signature_failure_spike');
-      expect(anomalies.first.metadata['severity'], 'high');
-    });
+        expect(anomalies, hasLength(1));
+        expect(anomalies.first.metadata['pattern'], 'signature_failure_spike');
+        expect(anomalies.first.metadata['severity'], 'high');
+      },
+    );
 
     test('does not emit anomaly below threshold', () async {
       detector = SecurityAnomalyDetector(
@@ -66,10 +68,7 @@ void main() {
     });
 
     test('emits anomaly on session reset spike', () async {
-      detector = SecurityAnomalyDetector(
-        eventBus: bus,
-        resetSpikeThreshold: 3,
-      );
+      detector = SecurityAnomalyDetector(eventBus: bus, resetSpikeThreshold: 3);
 
       final anomalies = <SecurityEvent>[];
       bus.events
@@ -139,32 +138,34 @@ void main() {
       expect(anomalies.first.metadata['severity'], 'critical');
     });
 
-    test('resets window after anomaly fires to avoid repeated alerts',
-        () async {
-      detector = SecurityAnomalyDetector(
-        eventBus: bus,
-        signatureFailureThreshold: 2,
-      );
+    test(
+      'resets window after anomaly fires to avoid repeated alerts',
+      () async {
+        detector = SecurityAnomalyDetector(
+          eventBus: bus,
+          signatureFailureThreshold: 2,
+        );
 
-      final anomalies = <SecurityEvent>[];
-      bus.events
-          .where((e) => e.type == SecurityEventType.anomalyDetected)
-          .listen(anomalies.add);
+        final anomalies = <SecurityEvent>[];
+        bus.events
+            .where((e) => e.type == SecurityEventType.anomalyDetected)
+            .listen(anomalies.add);
 
-      // First spike: 2 events triggers anomaly
-      bus.emitType(SecurityEventType.signatureVerificationFailed);
-      await Future<void>.delayed(Duration.zero);
-      bus.emitType(SecurityEventType.signatureVerificationFailed);
-      await Future<void>.delayed(Duration.zero);
+        // First spike: 2 events triggers anomaly
+        bus.emitType(SecurityEventType.signatureVerificationFailed);
+        await Future<void>.delayed(Duration.zero);
+        bus.emitType(SecurityEventType.signatureVerificationFailed);
+        await Future<void>.delayed(Duration.zero);
 
-      expect(anomalies, hasLength(1));
+        expect(anomalies, hasLength(1));
 
-      // One more event should NOT trigger — window was cleared
-      bus.emitType(SecurityEventType.signatureVerificationFailed);
-      await Future<void>.delayed(Duration.zero);
+        // One more event should NOT trigger — window was cleared
+        bus.emitType(SecurityEventType.signatureVerificationFailed);
+        await Future<void>.delayed(Duration.zero);
 
-      expect(anomalies, hasLength(1));
-    });
+        expect(anomalies, hasLength(1));
+      },
+    );
 
     test('dispose stops listening', () async {
       detector = SecurityAnomalyDetector(
@@ -222,8 +223,11 @@ void main() {
       ];
 
       for (final type in requiredTypes) {
-        expect(SecurityEventType.values.contains(type), isTrue,
-            reason: '$type must exist');
+        expect(
+          SecurityEventType.values.contains(type),
+          isTrue,
+          reason: '$type must exist',
+        );
       }
     });
 
@@ -250,9 +254,13 @@ void main() {
       final event = SecurityEvent(type: SecurityEventType.sessionReset);
       final after = DateTime.now();
       expect(
-          event.timestamp.isAfter(before) || event.timestamp == before, isTrue);
+        event.timestamp.isAfter(before) || event.timestamp == before,
+        isTrue,
+      );
       expect(
-          event.timestamp.isBefore(after) || event.timestamp == after, isTrue);
+        event.timestamp.isBefore(after) || event.timestamp == after,
+        isTrue,
+      );
     });
   });
 

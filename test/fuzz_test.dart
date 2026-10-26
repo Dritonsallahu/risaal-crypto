@@ -11,6 +11,7 @@ import 'package:risaal_crypto/src/models/session_state.dart';
 import 'package:risaal_crypto/src/sender_key.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 import 'package:risaal_crypto/src/session_reset_errors.dart';
+import 'helpers/crypto_test_fixtures.dart';
 import 'helpers/fake_secure_storage.dart';
 
 /// Deterministic Random for reproducible fuzz tests.
@@ -29,44 +30,6 @@ Uint8List _randomBytes(int length) {
 /// Generate a random base64 string of raw byte length.
 String _randomBase64(int byteLength) => base64Encode(_randomBytes(byteLength));
 
-/// Build a [PreKeyBundle] from the map returned by [generateKeyBundle()].
-PreKeyBundle _bundleFromMap(
-  Map<String, dynamic> bundle, {
-  required String userId,
-  required String deviceId,
-}) {
-  final signedPreKey = bundle['signedPreKey'] as Map<String, dynamic>;
-  final oneTimePreKeys = bundle['oneTimePreKeys'] as List<dynamic>;
-
-  return PreKeyBundle(
-    userId: userId,
-    deviceId: deviceId,
-    identityKey: bundle['identityKey'] as String,
-    identitySigningKey: bundle['identitySigningKey'] as String,
-    signedPreKey: SignedPreKeyPublic(
-      keyId: signedPreKey['keyId'] as int,
-      publicKey: signedPreKey['publicKey'] as String,
-      signature: signedPreKey['signature'] as String,
-    ),
-    oneTimePreKey: oneTimePreKeys.isNotEmpty
-        ? OneTimePreKeyPublic(
-            keyId:
-                (oneTimePreKeys.first as Map<String, dynamic>)['keyId'] as int,
-            publicKey: (oneTimePreKeys.first
-                as Map<String, dynamic>)['publicKey'] as String,
-          )
-        : null,
-    kyberPreKey: bundle.containsKey('kyberPreKey')
-        ? KyberPreKeyPublic(
-            keyId:
-                (bundle['kyberPreKey'] as Map<String, dynamic>)['keyId'] as int,
-            publicKey: (bundle['kyberPreKey']
-                as Map<String, dynamic>)['publicKey'] as String,
-          )
-        : null,
-  );
-}
-
 void main() {
   // ── A. Message Envelope Fuzzing ──────────────────────────────────────
 
@@ -77,40 +40,45 @@ void main() {
     setUp(() async {
       bobStorage = FakeSecureStorage();
       bob = SignalProtocolManager(secureStorage: bobStorage);
+      await bob.wipeForFreshRegistration();
       await bob.initialize();
       await bobStorage.write(key: 'user_id', value: 'bob-id');
       await bobStorage.write(key: 'device_id', value: 'bob-device');
     });
 
-    test('random malformed envelopes never crash decryptMessage (100 inputs)',
-        () async {
-      for (var i = 0; i < 100; i++) {
-        final envelope = _generateRandomEnvelope(i);
-        try {
-          await bob.decryptMessage('attacker-id', 'attacker-device', envelope);
-          // If it succeeds, that is unexpected but not a crash
-        } on SessionResetError {
-          // Acceptable: auth error triggered auto-reset
-        } on SessionUnstableError {
-          // Acceptable: rate limited
-        } on StateError {
-          // Acceptable: missing session, bad format, etc.
-        } on FormatException {
-          // Acceptable: bad JSON structure
-        } on TypeError {
-          // Acceptable: wrong types in the map
-        } on RangeError {
-          // Acceptable: base64 decode of garbage
-        } on ArgumentError {
-          // Acceptable: invalid argument to crypto primitives
-        } catch (e) {
-          // Any other exception is still acceptable as long as it doesn't segfault.
-          // The test passes as long as it doesn't hang or crash the process.
-          // We explicitly list known exception types above and catch-all here.
+    test(
+      'random malformed envelopes never crash decryptMessage (100 inputs)',
+      () async {
+        for (var i = 0; i < 100; i++) {
+          final envelope = _generateRandomEnvelope(i);
+          try {
+            await bob.decryptMessage(
+              'attacker-id',
+              'attacker-device',
+              envelope,
+            );
+            // If it succeeds, that is unexpected but not a crash
+          } on MessageAuthenticationError {
+            // Acceptable: authenticated session state was preserved.
+          } on StateError {
+            // Acceptable: missing session, bad format, etc.
+          } on FormatException {
+            // Acceptable: bad JSON structure
+          } on TypeError {
+            // Acceptable: wrong types in the map
+          } on RangeError {
+            // Acceptable: base64 decode of garbage
+          } on ArgumentError {
+            // Acceptable: invalid argument to crypto primitives
+          } catch (e) {
+            // Any other exception is still acceptable as long as it doesn't segfault.
+            // The test passes as long as it doesn't hang or crash the process.
+            // We explicitly list known exception types above and catch-all here.
+          }
         }
-      }
-      // If we get here, no inputs caused an unrecoverable crash
-    });
+        // If we get here, no inputs caused an unrecoverable crash
+      },
+    );
 
     test('envelope with empty map does not crash', () async {
       try {
@@ -129,11 +97,7 @@ void main() {
 
       for (final envelope in envelopes) {
         try {
-          await bob.decryptMessage(
-            'x',
-            'y',
-            envelope.cast<String, dynamic>(),
-          );
+          await bob.decryptMessage('x', 'y', envelope.cast<String, dynamic>());
         } catch (_) {
           // Any exception is fine
         }
@@ -167,7 +131,7 @@ void main() {
         {'type': 'message', 'message': 42},
         {
           'type': 'message',
-          'message': <String, dynamic>{'dhPublicKey': 42}
+          'message': <String, dynamic>{'dhPublicKey': 42},
         },
         {
           'type': 'prekey',
@@ -180,11 +144,7 @@ void main() {
 
       for (final envelope in envelopes) {
         try {
-          await bob.decryptMessage(
-            'x',
-            'y',
-            envelope.cast<String, dynamic>(),
-          );
+          await bob.decryptMessage('x', 'y', envelope.cast<String, dynamic>());
         } catch (_) {
           // Any exception is fine
         }
@@ -196,93 +156,103 @@ void main() {
 
   group('Ratchet state corruption fuzzing', () {
     test(
-        'corrupted ratchet state fields cause decrypt to throw, not produce garbage',
-        () async {
-      // Set up a valid session between Alice and Bob
-      final aliceStorage = FakeSecureStorage();
-      final bobStorage = FakeSecureStorage();
-      final alice = SignalProtocolManager(secureStorage: aliceStorage);
-      final bob = SignalProtocolManager(secureStorage: bobStorage);
-      await alice.initialize();
-      await bob.initialize();
-      await aliceStorage.write(key: 'user_id', value: 'alice-id');
-      await aliceStorage.write(key: 'device_id', value: 'alice-device');
-      await bobStorage.write(key: 'user_id', value: 'bob-id');
-      await bobStorage.write(key: 'device_id', value: 'bob-device');
+      'corrupted ratchet state fields cause decrypt to throw, not produce garbage',
+      () async {
+        // Set up a valid session between Alice and Bob
+        final aliceStorage = FakeSecureStorage();
+        final bobStorage = FakeSecureStorage();
+        final alice = SignalProtocolManager(secureStorage: aliceStorage);
+        final bob = SignalProtocolManager(secureStorage: bobStorage);
+        await alice.wipeForFreshRegistration();
+        await bob.wipeForFreshRegistration();
+        await alice.initialize();
+        await bob.initialize();
+        await aliceStorage.write(key: 'user_id', value: 'alice-id');
+        await aliceStorage.write(key: 'device_id', value: 'alice-device');
+        await bobStorage.write(key: 'user_id', value: 'bob-id');
+        await bobStorage.write(key: 'device_id', value: 'bob-device');
 
-      final bobBundle = await bob.generateKeyBundle();
-      final bundle =
-          _bundleFromMap(bobBundle, userId: 'bob-id', deviceId: 'bob-device');
-      await alice.createSession(bundle);
+        final acceptedBob = await CryptoTestFixtures.acceptInitialGeneration(
+          bob,
+        );
+        final bundle = acceptedBob.consumerBundle(
+          userId: 'bob-id',
+          deviceId: 'bob-device',
+        );
+        await alice.createSession(bundle);
 
-      // Establish Bob's session
-      final initEnvelope =
-          await alice.encryptMessage('bob-id', 'bob-device', 'init');
-      await bob.decryptMessage('alice-id', 'alice-device', initEnvelope);
+        // Establish Bob's session
+        final initEnvelope = await alice.encryptMessage(
+          'bob-id',
+          'bob-device',
+          'init',
+        );
+        await bob.decryptMessage('alice-id', 'alice-device', initEnvelope);
 
-      // Get a valid encrypted message from Alice
-      final validEnvelope =
-          await alice.encryptMessage('bob-id', 'bob-device', 'test');
-
-      // Now corrupt Bob's session state in storage
-      final sessionKey = 'crypto_session_alice-id_alice-device';
-      final rawState = await bobStorage.read(key: sessionKey);
-      expect(rawState, isNotNull);
-
-      final stateJson = jsonDecode(rawState!) as Map<String, dynamic>;
-
-      // Test various corruptions
-      final corruptions = <String, dynamic>{
-        'rootKey': _randomBase64(32), // Wrong root key
-        'sendingChainKey': _randomBase64(32), // Wrong sending chain key
-        'receivingChainKey': _randomBase64(32), // Wrong receiving chain key
-        'dhReceivingKey': _randomBase64(32), // Wrong DH receiving key
-      };
-
-      for (final entry in corruptions.entries) {
-        // Corrupt one field at a time
-        final corruptedState = Map<String, dynamic>.from(stateJson);
-        corruptedState[entry.key] = entry.value;
-
-        // Write corrupted state back
-        await bobStorage.write(
-          key: sessionKey,
-          value: jsonEncode(corruptedState),
+        // Get a valid encrypted message from Alice
+        final validEnvelope = await alice.encryptMessage(
+          'bob-id',
+          'bob-device',
+          'test',
         );
 
-        // Create a fresh Bob manager that will load the corrupted state
-        final corruptBob = SignalProtocolManager(secureStorage: bobStorage);
-        await corruptBob.initialize();
+        // Now corrupt Bob's session state in storage
+        final sessionKey = 'crypto_e2_session_alice-id_alice-device';
+        final rawState = await bobStorage.read(key: sessionKey);
+        expect(rawState, isNotNull);
 
-        try {
-          await corruptBob.decryptMessage(
-            'alice-id',
-            'alice-device',
-            validEnvelope,
+        final stateJson = jsonDecode(rawState!) as Map<String, dynamic>;
+
+        // Test various corruptions
+        final corruptions = <String, dynamic>{
+          'rootKey': _randomBase64(32), // Wrong root key
+          'sendingChainKey': _randomBase64(32), // Wrong sending chain key
+          'receivingChainKey': _randomBase64(32), // Wrong receiving chain key
+          'dhReceivingKey': _randomBase64(32), // Wrong DH receiving key
+        };
+
+        for (final entry in corruptions.entries) {
+          // Corrupt one field at a time
+          final corruptedState = Map<String, dynamic>.from(stateJson);
+          corruptedState[entry.key] = entry.value;
+
+          // Write corrupted state back
+          await bobStorage.write(
+            key: sessionKey,
+            value: jsonEncode(corruptedState),
           );
-          // If decryption somehow succeeds with corrupted state, verify it
-          // doesn't produce the original plaintext (that would be very wrong)
-        } on SessionResetError {
-          // Expected: MAC failure triggers auto-reset
-        } on StateError {
-          // Expected: invalid state
-        } catch (e) {
-          // Any exception is acceptable -- the point is no crash
-          // and no silent garbage output
-        }
 
-        // Restore original state for next iteration
-        await bobStorage.write(key: sessionKey, value: rawState);
-      }
-    });
+          // Create a fresh Bob manager that will load the corrupted state
+          final corruptBob = SignalProtocolManager(secureStorage: bobStorage);
+          await corruptBob.initialize();
+
+          try {
+            await corruptBob.decryptMessage(
+              'alice-id',
+              'alice-device',
+              validEnvelope,
+            );
+            // If decryption somehow succeeds with corrupted state, verify it
+            // doesn't produce the original plaintext (that would be very wrong)
+          } on MessageAuthenticationError {
+            // Expected: MAC failure rejects the candidate state.
+          } on StateError {
+            // Expected: invalid state
+          } catch (e) {
+            // Any exception is acceptable -- the point is no crash
+            // and no silent garbage output
+          }
+
+          // Restore original state for next iteration
+          await bobStorage.write(key: sessionKey, value: rawState);
+        }
+      },
+    );
 
     test('RatchetState.fromJson with garbage fields throws', () {
       final garbageInputs = [
         <String, dynamic>{}, // empty
-        {
-          'dhSendingKeyPair': 42,
-          'dhReceivingKey': null,
-        }, // wrong types
+        {'dhSendingKeyPair': 42, 'dhReceivingKey': null}, // wrong types
         {
           'dhSendingKeyPair': '',
           'dhReceivingKey': '',
@@ -334,17 +304,19 @@ void main() {
   // ── C. PreKeyBundle Fuzzing ──────────────────────────────────────────
 
   group('PreKeyBundle fuzzing', () {
-    test('createSession rejects bundles with invalid key sizes gracefully',
-        () async {
+    test('createSession rejects bundles with invalid key sizes gracefully', () async {
       final aliceStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      await alice.wipeForFreshRegistration();
       await alice.initialize();
 
       // Generate a valid signing key for the signature field
       final signingKP = await SignalKeyHelper.generateSigningKeyPair();
       // Generate a real signed pre-key so the signature is correct structure-wise
-      final signedPreKey =
-          await SignalKeyHelper.generateSignedPreKey(0, signingKP);
+      final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+        0,
+        signingKP,
+      );
 
       // Test with wrong-sized identity key (should be 32 bytes)
       final wrongSizeKeys = [
@@ -357,6 +329,7 @@ void main() {
 
       for (final badKey in wrongSizeKeys) {
         final bundle = PreKeyBundle(
+          opkRoute: testOpkRoute,
           userId: 'victim',
           deviceId: 'device',
           identityKey: badKey,
@@ -374,12 +347,15 @@ void main() {
         } catch (e) {
           // StateError, ArgumentError, FormatException, etc. are all acceptable
           expect(
-              e,
-              isNot(isA<Error>().having(
+            e,
+            isNot(
+              isA<Error>().having(
                 (e) => e.runtimeType.toString(),
                 'type',
                 contains('Segfault'),
-              )));
+              ),
+            ),
+          );
         }
       }
     });
@@ -420,12 +396,14 @@ void main() {
     test('bundles with all-zero keys are handled gracefully', () async {
       final aliceStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      await alice.wipeForFreshRegistration();
       await alice.initialize();
 
       final zeroKey = base64Encode(Uint8List(32));
       final zeroSig = base64Encode(Uint8List(64));
 
       final bundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'zero-user',
         deviceId: 'zero-device',
         identityKey: zeroKey,
@@ -452,12 +430,14 @@ void main() {
     test('bundles with all-0xFF keys are handled gracefully', () async {
       final aliceStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      await alice.wipeForFreshRegistration();
       await alice.initialize();
 
       final ffKey = base64Encode(Uint8List.fromList(List.filled(32, 0xFF)));
       final ffSig = base64Encode(Uint8List.fromList(List.filled(64, 0xFF)));
 
       final bundle = PreKeyBundle(
+        opkRoute: testOpkRoute,
         userId: 'ff-user',
         deviceId: 'ff-device',
         identityKey: ffKey,
@@ -482,6 +462,7 @@ void main() {
     test('100 random PreKeyBundles do not crash createSession', () async {
       final aliceStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
+      await alice.wipeForFreshRegistration();
       await alice.initialize();
 
       for (var i = 0; i < 100; i++) {
@@ -490,6 +471,7 @@ void main() {
         final sigSize = _rng.nextInt(128) + 1; // 1-128 bytes
 
         final bundle = PreKeyBundle(
+          opkRoute: testOpkRoute,
           userId: 'fuzz-user-$i',
           deviceId: 'fuzz-device-$i',
           identityKey: _randomBase64(keySize),
@@ -519,40 +501,37 @@ void main() {
   // ── D. Sender Key Fuzzing ────────────────────────────────────────────
 
   group('Sender Key fuzzing', () {
-    test('SenderKeyDistribution.fromJson with garbage fields throws or handles',
-        () {
-      final garbageInputs = [
-        <String, dynamic>{}, // empty
-        {'groupId': 42, 'senderId': null}, // wrong types
-        {
-          'groupId': 'g',
-          'senderId': 's',
-          'iteration': 'not a number',
-          'chainKey': 42,
-          'signingKey': true,
-        },
-      ];
+    test(
+      'SenderKeyDistribution.fromJson with garbage fields throws or handles',
+      () {
+        final garbageInputs = [
+          <String, dynamic>{}, // empty
+          {'groupId': 42, 'senderId': null}, // wrong types
+          {
+            'groupId': 'g',
+            'senderId': 's',
+            'iteration': 'not a number',
+            'chainKey': 42,
+            'signingKey': true,
+          },
+        ];
 
-      for (final input in garbageInputs) {
-        try {
-          SenderKeyDistribution.fromJson(input);
-          // May succeed with type coercion or fail
-        } catch (_) {
-          // Any exception is acceptable
+        for (final input in garbageInputs) {
+          try {
+            SenderKeyDistribution.fromJson(input);
+            // May succeed with type coercion or fail
+          } catch (_) {
+            // Any exception is acceptable
+          }
         }
-      }
-    });
+      },
+    );
 
     test('SenderKeyMessage.fromJson with garbage fields throws or handles', () {
       final garbageInputs = [
         <String, dynamic>{}, // empty
         {'iteration': 'abc', 'ciphertext': 42, 'iv': null, 'signature': true},
-        {
-          'iteration': -1,
-          'ciphertext': '',
-          'iv': '',
-          'signature': '',
-        },
+        {'iteration': -1, 'ciphertext': '', 'iv': '', 'signature': ''},
       ];
 
       for (final input in garbageInputs) {
@@ -564,68 +543,79 @@ void main() {
       }
     });
 
-    test('processSenderKeyDistribution with corrupt chain key rejects',
-        () async {
-      final storage = FakeSecureStorage();
-      final manager = SignalProtocolManager(secureStorage: storage);
-      await manager.initialize();
-      await storage.write(key: 'user_id', value: 'test-user');
+    test(
+      'processSenderKeyDistribution with corrupt chain key rejects',
+      () async {
+        final storage = FakeSecureStorage();
+        final manager = SignalProtocolManager(secureStorage: storage);
+        await manager.wipeForFreshRegistration();
+        await manager.initialize();
+        await storage.write(key: 'user_id', value: 'test-user');
 
-      // Valid-looking distribution but with wrong chain key sizes
-      final badDistributions = [
-        // Chain key too short
-        SenderKeyDistribution(
-          groupId: 'group-fuzz',
-          senderId: 'attacker',
-          iteration: 0,
-          chainKey: base64Encode(Uint8List(8)), // Only 8 bytes, should be 32
-          signingKey: _randomBase64(32),
-        ),
-        // Chain key empty
-        SenderKeyDistribution(
-          groupId: 'group-fuzz',
-          senderId: 'attacker',
-          iteration: 0,
-          chainKey: base64Encode(Uint8List(0)),
-          signingKey: _randomBase64(32),
-        ),
-        // Chain key very large
-        SenderKeyDistribution(
-          groupId: 'group-fuzz',
-          senderId: 'attacker',
-          iteration: 0,
-          chainKey: base64Encode(Uint8List(1024)),
-          signingKey: _randomBase64(32),
-        ),
-      ];
-
-      for (final dist in badDistributions) {
-        try {
-          await manager.processGroupSenderKey('group-fuzz', 'attacker', dist);
-          // If it stores the key, try decrypting -- should fail
-          final fakeMessage = SenderKeyMessage(
+        // Valid-looking distribution but with wrong chain key sizes
+        final badDistributions = [
+          // Chain key too short
+          SenderKeyDistribution(
+            cryptoProtocolEpoch: 2,
+            groupId: 'group-fuzz',
+            senderId: 'attacker',
             iteration: 0,
-            ciphertext: _randomBase64(64),
-            iv: _randomBase64(16),
-            signature: _randomBase64(64),
-          );
-          await manager.decryptGroupMessage(
-            'group-fuzz',
-            'attacker',
-            jsonEncode(fakeMessage.toJson()),
-          );
-          // Should not produce valid plaintext
-        } catch (_) {
-          // Expected: any error is acceptable
+            epoch: 0,
+            chainKey: base64Encode(Uint8List(8)), // Only 8 bytes, should be 32
+            signingKey: _randomBase64(32),
+          ),
+          // Chain key empty
+          SenderKeyDistribution(
+            cryptoProtocolEpoch: 2,
+            groupId: 'group-fuzz',
+            senderId: 'attacker',
+            iteration: 0,
+            epoch: 0,
+            chainKey: base64Encode(Uint8List(0)),
+            signingKey: _randomBase64(32),
+          ),
+          // Chain key very large
+          SenderKeyDistribution(
+            cryptoProtocolEpoch: 2,
+            groupId: 'group-fuzz',
+            senderId: 'attacker',
+            iteration: 0,
+            epoch: 0,
+            chainKey: base64Encode(Uint8List(1024)),
+            signingKey: _randomBase64(32),
+          ),
+        ];
+
+        for (final dist in badDistributions) {
+          try {
+            await manager.processGroupSenderKey('group-fuzz', 'attacker', dist);
+            // If it stores the key, try decrypting -- should fail
+            final fakeMessage = SenderKeyMessage(
+              iteration: 0,
+              ciphertext: _randomBase64(64),
+              iv: _randomBase64(16),
+              signature: _randomBase64(64),
+            );
+            await manager.decryptGroupMessage(
+              'group-fuzz',
+              'attacker',
+              jsonEncode(fakeMessage.toJson()),
+            );
+            // Should not produce valid plaintext
+          } catch (_) {
+            // Expected: any error is acceptable
+          }
         }
-      }
-    });
+      },
+    );
 
     test('decrypt with forged signature rejects', () async {
       final aliceStorage = FakeSecureStorage();
       final bobStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
       await aliceStorage.write(key: 'user_id', value: 'alice-id');
@@ -638,8 +628,10 @@ void main() {
       await bob.processGroupSenderKey(groupId, 'alice-id', distribution);
 
       // Alice encrypts a message
-      final ciphertext =
-          await alice.encryptGroupMessage(groupId, 'legitimate message');
+      final ciphertext = await alice.encryptGroupMessage(
+        groupId,
+        'legitimate message',
+      );
       final msgJson = jsonDecode(ciphertext) as Map<String, dynamic>;
 
       // Forge the signature
@@ -649,11 +641,13 @@ void main() {
       // Bob should reject the forged message
       expect(
         () => bob.decryptGroupMessage(groupId, 'alice-id', forgedCiphertext),
-        throwsA(isA<StateError>().having(
-          (e) => e.message,
-          'message',
-          contains('signature'),
-        )),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('signature'),
+          ),
+        ),
       );
     });
 
@@ -662,6 +656,8 @@ void main() {
       final bobStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
       await aliceStorage.write(key: 'user_id', value: 'alice-id');
@@ -672,13 +668,15 @@ void main() {
       final distribution = await alice.generateGroupSenderKey(groupId);
       await bob.processGroupSenderKey(groupId, 'alice-id', distribution);
 
-      final ciphertext =
-          await alice.encryptGroupMessage(groupId, 'tamper target');
+      final ciphertext = await alice.encryptGroupMessage(
+        groupId,
+        'tamper target',
+      );
       final msgJson = jsonDecode(ciphertext) as Map<String, dynamic>;
 
-      // Tamper with the ciphertext
+      // Preserve the authenticated v3 wire marker and tamper with the body.
       final ctBytes = base64Decode(msgJson['ciphertext'] as String);
-      ctBytes[0] ^= 0xFF;
+      ctBytes[20] ^= 0xFF;
       msgJson['ciphertext'] = base64Encode(ctBytes);
       final tamperedCiphertext = jsonEncode(msgJson);
 
@@ -694,6 +692,8 @@ void main() {
       final bobStorage = FakeSecureStorage();
       final alice = SignalProtocolManager(secureStorage: aliceStorage);
       final bob = SignalProtocolManager(secureStorage: bobStorage);
+      await alice.wipeForFreshRegistration();
+      await bob.wipeForFreshRegistration();
       await alice.initialize();
       await bob.initialize();
       await aliceStorage.write(key: 'user_id', value: 'alice-id');
@@ -707,18 +707,23 @@ void main() {
       final ciphertext = await alice.encryptGroupMessage(groupId, 'replay me');
 
       // First decrypt should succeed
-      final plaintext =
-          await bob.decryptGroupMessage(groupId, 'alice-id', ciphertext);
+      final plaintext = await bob.decryptGroupMessage(
+        groupId,
+        'alice-id',
+        ciphertext,
+      );
       expect(plaintext, equals('replay me'));
 
       // Second decrypt of the same message should fail (iteration behind stored)
       expect(
         () => bob.decryptGroupMessage(groupId, 'alice-id', ciphertext),
-        throwsA(isA<StateError>().having(
-          (e) => e.message,
-          'message',
-          contains('replay'),
-        )),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('replay'),
+          ),
+        ),
       );
     });
   });
@@ -805,10 +810,7 @@ Map<String, dynamic> _generateRandomEnvelope(int seed) {
 
     case 1:
       // Envelope with missing message field
-      return {
-        'type': 'message',
-        'senderIdentityKey': _randomBase64(32),
-      };
+      return {'type': 'message', 'senderIdentityKey': _randomBase64(32)};
 
     case 2:
       // Envelope with garbage message content

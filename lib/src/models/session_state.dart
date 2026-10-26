@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'signal_keys.dart';
+import '../crypto_protocol.dart';
 import '../secure_memory.dart';
+import 'signal_keys.dart';
 
 /// Mutable state for the Double Ratchet between two parties.
 ///
@@ -98,6 +99,12 @@ class RatchetState {
   /// Limited to 100 entries to prevent DoS attacks that force unbounded storage.
   Map<String, Uint8List> skippedKeys;
 
+  /// When each entry of [skippedKeys] was stored, as Unix milliseconds
+  /// (R4-L2). [DoubleRatchet] purges keys older than
+  /// [DoubleRatchet.skippedKeyTtl] at the start of every decrypt. Local
+  /// storage only; never on the wire.
+  Map<String, int> skippedKeyAges;
+
   /// Set of received message identifiers ("dhPublicKey:messageNumber")
   /// for explicit anti-replay protection. Persisted across app restarts.
   ///
@@ -106,6 +113,24 @@ class RatchetState {
   /// as a replay. Capped at [DoubleRatchet.maxReceivedTracked] entries,
   /// pruning oldest when exceeded.
   Set<String> receivedMessages;
+
+  /// Canonical base64 identity public key of the remote party this session was
+  /// established with (R4-PKG-SESSION-PIN-CHECK). `null` only for a record
+  /// written before this field existed; [SignalProtocolManager] stamps such a
+  /// record on first load. Every encrypt and decrypt refuses the session when
+  /// this disagrees with the identity pinned for the peer. Local storage only;
+  /// never on the wire.
+  String? remoteIdentityKey;
+
+  /// The peer has sent a valid Double Ratchet v3 message on this session, or
+  /// the session was created with PQXDH transcript 2 (R4-L1). From then on a
+  /// v2 message on this session is refused (L1-I1). Local storage only.
+  bool peerSpeaksV3;
+
+  /// This session sends Double Ratchet v3 (R4-L1). Set by the first v3 send,
+  /// or at creation with PQXDH transcript 2, and never cleared: the peer
+  /// refuses v2 from a session that has sent v3. Local storage only.
+  bool sendV3;
 
   RatchetState({
     required this.dhSendingKeyPair,
@@ -117,70 +142,103 @@ class RatchetState {
     this.receiveMessageNumber = 0,
     this.previousChainLength = 0,
     Map<String, Uint8List>? skippedKeys,
+    Map<String, int>? skippedKeyAges,
     Set<String>? receivedMessages,
-  })  : skippedKeys = skippedKeys ?? {},
-        receivedMessages = receivedMessages ?? {};
+    this.remoteIdentityKey,
+    this.peerSpeaksV3 = false,
+    this.sendV3 = false,
+  }) : skippedKeys = skippedKeys ?? {},
+       skippedKeyAges = skippedKeyAges ?? {},
+       receivedMessages = receivedMessages ?? {};
 
   /// Serialize to JSON, encoding all [Uint8List] fields to base64 strings.
   ///
-  /// The output is backward-compatible with the v1 format (all values are
-  /// base64 strings). A `v` field is added so [fromJson] can distinguish
-  /// formats in the future.
+  /// Epoch-2 storage is explicitly marked. Legacy/unversioned state belongs in
+  /// the quarantined pre-cutover namespace and is never accepted here.
   Map<String, dynamic> toJson() => {
-        'v': 2,
-        'dhSendingKeyPair': base64Encode(dhSendingKeyPair),
-        'dhReceivingKey': base64Encode(dhReceivingKey),
-        'rootKey': base64Encode(rootKey),
-        'sendingChainKey': base64Encode(sendingChainKey),
-        'receivingChainKey': base64Encode(receivingChainKey),
-        'sendMessageNumber': sendMessageNumber,
-        'receiveMessageNumber': receiveMessageNumber,
-        'previousChainLength': previousChainLength,
-        'skippedKeys': skippedKeys.map((k, v) => MapEntry(k, base64Encode(v))),
-        'receivedMessages': receivedMessages.toList(),
-      };
+    'v': 2,
+    'cryptoProtocolEpoch': RisaalCryptoProtocol.cryptoProtocolEpoch,
+    'dhSendingKeyPair': base64Encode(dhSendingKeyPair),
+    'dhReceivingKey': base64Encode(dhReceivingKey),
+    'rootKey': base64Encode(rootKey),
+    'sendingChainKey': base64Encode(sendingChainKey),
+    'receivingChainKey': base64Encode(receivingChainKey),
+    'sendMessageNumber': sendMessageNumber,
+    'receiveMessageNumber': receiveMessageNumber,
+    'previousChainLength': previousChainLength,
+    'skippedKeys': skippedKeys.map((k, v) => MapEntry(k, base64Encode(v))),
+    'skippedKeyAges': Map<String, int>.of(skippedKeyAges),
+    'receivedMessages': receivedMessages.toList(),
+    if (remoteIdentityKey != null) 'remoteIdentityKey': remoteIdentityKey,
+    // R4-L1: written only once set, so a v2-only record is byte-identical to
+    // the pre-R4-L1 format.
+    if (peerSpeaksV3) 'peerSpeaksV3': true,
+    if (sendV3) 'sendV3': true,
+  };
 
   /// Deserialize from JSON, decoding base64 strings to [Uint8List].
   ///
-  /// Handles both v1 (legacy String fields) and v2 (base64 in JSON) since
-  /// both store base64 strings in the JSON.
-  factory RatchetState.fromJson(Map<String, dynamic> json) => RatchetState(
-        dhSendingKeyPair: _decodeField(json['dhSendingKeyPair']),
-        dhReceivingKey: _decodeField(json['dhReceivingKey']),
-        rootKey: _decodeField(json['rootKey']),
-        sendingChainKey: _decodeField(json['sendingChainKey']),
-        receivingChainKey: _decodeField(json['receivingChainKey']),
-        sendMessageNumber: json['sendMessageNumber'] as int,
-        receiveMessageNumber: json['receiveMessageNumber'] as int,
-        previousChainLength: json['previousChainLength'] as int,
-        skippedKeys: (json['skippedKeys'] as Map<String, dynamic>?)
-                ?.map((k, v) => MapEntry(k, _decodeField(v))) ??
-            {},
-        receivedMessages: (json['receivedMessages'] as List<dynamic>?)
-                ?.cast<String>()
-                .toSet() ??
-            {},
+  /// Only the exact epoch-2 storage schema is accepted by the exported live
+  /// API. Offline migration tools must use a separately named legacy parser.
+  factory RatchetState.fromJson(Map<String, dynamic> json) {
+    if (json['v'] != 2 ||
+        json['cryptoProtocolEpoch'] !=
+            RisaalCryptoProtocol.cryptoProtocolEpoch) {
+      throw const FormatException(
+        'Unsupported or legacy Double Ratchet storage state',
       );
+    }
+    final skippedKeys =
+        (json['skippedKeys'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(k, _decodeField(v)),
+        ) ??
+        <String, Uint8List>{};
+    // Backward compatible (R4-L2): a key without a stored age (legacy state
+    // or a missing entry) is stamped with the load time, never dropped.
+    final storedAges = json['skippedKeyAges'] as Map<String, dynamic>?;
+    final loadTime = DateTime.now().millisecondsSinceEpoch;
+    // Backward compatible (R4-PKG-SESSION-PIN-CHECK): absent on older records.
+    final remoteIdentityKey = json['remoteIdentityKey'];
+    if (remoteIdentityKey != null && remoteIdentityKey is! String) {
+      throw const FormatException('Invalid session remote identity key');
+    }
+    final skippedKeyAges = <String, int>{
+      for (final k in skippedKeys.keys) k: (storedAges?[k] as int?) ?? loadTime,
+    };
+    // R4-L1: absent on records written before identity binding (false).
+    final peerSpeaksV3 = json['peerSpeaksV3'] ?? false;
+    final sendV3 = json['sendV3'] ?? false;
+    if (peerSpeaksV3 is! bool || sendV3 is! bool) {
+      throw const FormatException('Invalid session identity-binding flags');
+    }
+    return RatchetState(
+      dhSendingKeyPair: _decodeField(json['dhSendingKeyPair']),
+      dhReceivingKey: _decodeField(json['dhReceivingKey']),
+      rootKey: _decodeField(json['rootKey']),
+      sendingChainKey: _decodeField(json['sendingChainKey']),
+      receivingChainKey: _decodeField(json['receivingChainKey']),
+      sendMessageNumber: json['sendMessageNumber'] as int,
+      receiveMessageNumber: json['receiveMessageNumber'] as int,
+      previousChainLength: json['previousChainLength'] as int,
+      skippedKeys: skippedKeys,
+      skippedKeyAges: skippedKeyAges,
+      receivedMessages:
+          (json['receivedMessages'] as List<dynamic>?)
+              ?.cast<String>()
+              .toSet() ??
+          {},
+      remoteIdentityKey: remoteIdentityKey as String?,
+      peerSpeaksV3: peerSpeaksV3,
+      sendV3: sendV3,
+    );
+  }
 
   /// Decode a single field from its stored representation to raw bytes.
   ///
-  /// Two on-disk formats are accepted:
-  ///   - **v2 (current):** base64-encoded bytes — `base64Encode(rawBytes)`.
-  ///   - **v1 (legacy):** raw JSON string for `dhSendingKeyPair` only, e.g.
-  ///     `{"publicKey":"...","privateKey":"..."}`. v1 sessions stored this
-  ///     field as the JSON itself (not base64'd). When we see a value that
-  ///     starts with `{`, treat it as v1 and recover the bytes by UTF-8
-  ///     encoding the string. This avoids requiring all users to log out
-  ///     and re-establish sessions after the v1→v2 storage migration.
+  /// Epoch-2 stores every byte field as strict base64.
   static Uint8List _decodeField(dynamic value) {
     if (value is String) {
       if (value.isEmpty) return Uint8List(0);
-      // v1 legacy: dhSendingKeyPair was stored as raw JSON string. Other
-      // fields were always base64 in both v1 and v2, so the `{` check is
-      // safe — base64 alphabet does not contain `{`.
-      if (value.startsWith('{')) {
-        return Uint8List.fromList(utf8.encode(value));
-      }
       return Uint8List.fromList(base64Decode(value));
     }
     throw FormatException('Expected base64 string, got ${value.runtimeType}');
@@ -205,6 +263,7 @@ class RatchetState {
       SecureMemory.zeroBytes(key);
     }
     skippedKeys.clear();
+    skippedKeyAges.clear();
     receivedMessages.clear();
     sendMessageNumber = 0;
     receiveMessageNumber = 0;
@@ -246,16 +305,16 @@ class SignalSession {
   });
 
   Map<String, dynamic> toJson() => {
-        'recipientId': recipientId,
-        'recipientDeviceId': recipientDeviceId,
-        'ratchetState': ratchetState.toJson(),
-      };
+    'recipientId': recipientId,
+    'recipientDeviceId': recipientDeviceId,
+    'ratchetState': ratchetState.toJson(),
+  };
 
   factory SignalSession.fromJson(Map<String, dynamic> json) => SignalSession(
-        recipientId: json['recipientId'] as String,
-        recipientDeviceId: json['recipientDeviceId'] as String,
-        ratchetState: RatchetState.fromJson(
-          json['ratchetState'] as Map<String, dynamic>,
-        ),
-      );
+    recipientId: json['recipientId'] as String,
+    recipientDeviceId: json['recipientDeviceId'] as String,
+    ratchetState: RatchetState.fromJson(
+      json['ratchetState'] as Map<String, dynamic>,
+    ),
+  );
 }

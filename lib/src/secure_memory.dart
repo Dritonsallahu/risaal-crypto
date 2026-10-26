@@ -2,57 +2,53 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
-/// FFI bindings to native secure memory operations.
+/// Best-effort zeroing of key copies this package owns, plus an optional
+/// native buffer for host-managed long-lived keys.
 ///
-/// Provides guaranteed memory zeroing that the compiler **cannot optimize away**.
+/// What is and is not wiped (R4-M1):
+///   - [zeroBytes] overwrites a **mutable** Dart list in place with a plain Dart
+///     loop and returns whether it could. Every DH / HKDF output the package
+///     keeps is first copied into a package-owned [Uint8List] ([ownedCopy]) so
+///     that this zeroing really happens.
+///   - The `cryptography` and `pqcrypto` implementations keep their **own**
+///     internal copies (e.g. the `SensitiveBytes` behind `SecretKeyData`, which
+///     `cryptography` 2.9.0 creates without overwrite-on-destroy). This package
+///     cannot reach those buffers: they are **never overwritten** and stay in
+///     RAM until the garbage collector reclaims and the allocator reuses them.
+///   - The Dart GC may have moved (copied) a buffer before it is zeroed; stale
+///     copies left behind are not wiped.
+///   - There is no `volatile` guarantee on the Dart heap. The loop writes to a
+///     heap object that escapes, so it is not expected to be optimized away,
+///     but nothing proves that it cannot be.
 ///
-/// The problem:
-///   - Dart's GC does not guarantee zeroing freed memory
-///   - After a key is no longer referenced, it remains in RAM until overwritten
-///   - A memory dump (Frida, /proc/pid/mem, forensic tools) can recover keys
-///   - Dart may copy objects during GC compaction, leaving additional stale copies
-///
-/// This service solves the problem by calling native C code that:
-///   1. Writes zeros to the memory
-///   2. Uses a volatile function pointer to prevent the compiler from optimizing
-///      away the write (same technique as libsodium's `sodium_memzero`)
-///
-/// Platform support:
-///   - **Android**: Loads `librisaal_security.so` (compiled from C sources)
-///   - **iOS**: Symbols are compiled into the Runner process (DynamicLibrary.process)
-///   - **Other platforms**: Throws `UnsupportedError`
-///
-/// Native functions (risaal-app/.../risaal_security.c):
-///   - `risaal_secure_wipe(ptr, len)`: Zero memory at `ptr`
-///   - `risaal_secure_alloc(len)`: Allocate zeroed memory
-///   - `risaal_secure_free(ptr, len)`: Zero and free memory
+/// Native memory ([allocSecure] / [SecureBuffer]): keeps bytes outside the Dart
+/// heap and wipes them on [SecureBuffer.dispose] via `risaal_secure_free`
+/// (`volatile` zeroing in C). Available only where the host app links the
+/// native library:
+///   - **Android**: `librisaal_security.so`
+///   - **iOS**: symbols compiled into the Runner process (DynamicLibrary.process)
+///   - **Other platforms / tests**: [allocSecure] returns `null`.
 ///
 /// Usage patterns:
-///   1. **Dart-managed keys**: Call [zeroBytes] after using a key:
+///   1. **Package-owned copies**: copy, use, zero:
 ///      ```dart
-///      final key = await deriveKey(...);
+///      final key = SecureMemory.ownedCopy(await secret.extractBytes());
 ///      // ... use key ...
-///      SecureMemory.zeroBytes(key);  // Zero before GC
+///      SecureMemory.zeroBytes(key);  // true: the copy is now all zeros
 ///      ```
 ///
-///   2. **Native-managed keys** (advanced): Use [allocSecure] to keep keys in
-///      native memory (outside Dart heap, not subject to GC copying):
+///   2. **Native-managed keys** (host-chosen, long-lived):
 ///      ```dart
 ///      final buf = SecureMemory.allocSecure(32);
 ///      buf.write(keyBytes);
 ///      // ... use key via buf.read() ...
-///      buf.dispose();  // Securely zero and free
+///      buf.dispose();  // Zero (volatile, native) and free
 ///      ```
 ///
-/// Limitations:
-///   - Dart may have already copied the key during GC compaction before you call [zeroBytes]
-///   - This zeros the **current live copy** — stale copies may persist until overwritten
-///   - For maximum security, use [allocSecure] to keep keys in native memory from the start
-///
 /// See also:
-///   - [zeroBytes] to wipe a Dart List in-place
-///   - [allocSecure] to allocate native memory for long-lived keys
-///   - [SecureBuffer] for the native memory wrapper
+///   - [zeroBytes] to wipe a mutable Dart list in place
+///   - [ownedCopy] to take a zeroable copy of library-owned bytes
+///   - [allocSecure] / [SecureBuffer] for native memory
 class SecureMemory {
   SecureMemory._();
 
@@ -74,89 +70,50 @@ class SecureMemory {
 
   // ── Native function signatures ────────────────────────────────────
 
-  static final _secureWipe = _lib?.lookupFunction<
-      Void Function(Pointer<Uint8>, Int64),
-      void Function(Pointer<Uint8>, int)>('risaal_secure_wipe');
+  static final _secureAlloc = _lib
+      ?.lookupFunction<
+        Pointer<Uint8> Function(Int64),
+        Pointer<Uint8> Function(int)
+      >('risaal_secure_alloc');
 
-  static final _secureAlloc = _lib?.lookupFunction<
-      Pointer<Uint8> Function(Int64),
-      Pointer<Uint8> Function(int)>('risaal_secure_alloc');
-
-  static final _secureFree = _lib?.lookupFunction<
-      Void Function(Pointer<Uint8>, Int64),
-      void Function(Pointer<Uint8>, int)>('risaal_secure_free');
+  static final _secureFree = _lib
+      ?.lookupFunction<
+        Void Function(Pointer<Uint8>, Int64),
+        void Function(Pointer<Uint8>, int)
+      >('risaal_secure_free');
 
   // ── Public API ────────────────────────────────────────────────────
 
-  /// Zero out a Dart byte list in-place (best-effort).
+  /// Zero a Dart byte list in place (best-effort, Dart heap only).
   ///
-  /// This is the primary method for wiping key material held in Dart Lists.
-  /// After this call, the original list contains all zeros.
+  /// Returns `true` when every element is now zero, `false` when the list
+  /// could not be written: unmodifiable (e.g. `SensitiveBytes` returned by
+  /// `cryptography`'s `extractBytes()`) or already destroyed. A `false` result
+  /// means **nothing was wiped**; take an [ownedCopy] up front instead.
   ///
-  /// How it works:
-  ///   1. Allocate native buffer via `risaal_secure_alloc`
-  ///   2. Wipe the native buffer (in case it wasn't already zeroed)
-  ///   3. Free the native buffer via `risaal_secure_free`
-  ///   4. Zero the Dart list in-place
-  ///
-  /// **Important caveat**: Dart may have already copied the list contents during
-  /// GC compaction before you called this method. This zeros the **current live
-  /// copy** — stale copies may persist in memory until overwritten by the allocator.
-  /// There's no way to guarantee all copies are wiped. For maximum security, use
-  /// [allocSecure] to keep keys in native memory from the start (no GC copying).
-  ///
-  /// If FFI is unavailable (e.g., tests, unsupported platform), falls back to
-  /// zeroing the Dart list only (no native wipe).
-  ///
-  /// Example:
-  /// ```dart
-  /// final key = await deriveKey(...);
-  /// // ... use key ...
-  /// SecureMemory.zeroBytes(key);  // Wipe before key goes out of scope
-  /// ```
-  static void zeroBytes(List<int> bytes) {
-    if (bytes.isEmpty) return;
-
-    final alloc = _secureAlloc;
-    final wipe = _secureWipe;
-    final free = _secureFree;
-
-    if (alloc != null && wipe != null && free != null) {
-      final ptr = alloc(bytes.length);
-      if (ptr != nullptr) {
-        wipe(ptr, bytes.length);
-        free(ptr, bytes.length);
+  /// Caveats: the GC may already have copied the list (stale copies are not
+  /// wiped), and there is no `volatile` guarantee on the Dart heap.
+  static bool zeroBytes(List<int> bytes) {
+    try {
+      for (int i = 0; i < bytes.length; i++) {
+        bytes[i] = 0;
       }
+      return true;
+    } on UnsupportedError {
+      return false;
+    } on StateError {
+      return false;
     }
-
-    // Always zero the Dart-side list
-    _fallbackZero(bytes);
   }
 
-  /// Zero out a Uint8List using native secure wipe.
-  static void zeroUint8List(Uint8List bytes) {
-    if (bytes.isEmpty) return;
+  /// Zero a [Uint8List] in place. Same semantics as [zeroBytes].
+  static bool zeroUint8List(Uint8List bytes) => zeroBytes(bytes);
 
-    final alloc = _secureAlloc;
-    final wipe = _secureWipe;
-    final free = _secureFree;
-
-    if (alloc != null && wipe != null && free != null) {
-      final ptr = alloc(bytes.length);
-      if (ptr != nullptr) {
-        for (int i = 0; i < bytes.length; i++) {
-          ptr[i] = bytes[i];
-        }
-        wipe(ptr, bytes.length);
-        free(ptr, bytes.length);
-      }
-    }
-
-    // Always zero the Dart-side buffer
-    for (int i = 0; i < bytes.length; i++) {
-      bytes[i] = 0;
-    }
-  }
+  /// Copy [bytes] into a new, mutable, package-owned [Uint8List].
+  ///
+  /// Use on library-owned key bytes (e.g. `SecretKey.extractBytes()`) so the
+  /// copy can later be zeroed with [zeroBytes]. The source is left untouched.
+  static Uint8List ownedCopy(List<int> bytes) => Uint8List.fromList(bytes);
 
   /// Allocate a native buffer for sensitive data (advanced usage).
   ///
@@ -191,20 +148,6 @@ class SecureMemory {
     if (ptr == nullptr) return null;
     return SecureBuffer._(ptr, length);
   }
-
-  /// Fallback zeroing for when FFI is not available (tests, unsupported platform).
-  /// Silently skips if the list is unmodifiable (e.g. SensitiveBytes from
-  /// the cryptography package).
-  static void _fallbackZero(List<int> bytes) {
-    try {
-      for (int i = 0; i < bytes.length; i++) {
-        bytes[i] = 0;
-      }
-    } on UnsupportedError {
-      // List is unmodifiable (e.g. cryptography package SensitiveBytes).
-      // The native wipe already handled the copy — nothing more we can do.
-    }
-  }
 }
 
 /// A buffer in native memory for sensitive data (crypto keys).
@@ -225,7 +168,8 @@ class SecureMemory {
 ///     (subject to GC copying). Minimize the lifetime of the Dart copy.
 ///
 /// Use this for long-lived keys (e.g., identity private key) that persist across
-/// multiple operations. For ephemeral keys, [SecureMemory.zeroBytes] is sufficient.
+/// multiple operations. Short-lived package-owned copies use the best-effort
+/// Dart-heap [SecureMemory.zeroBytes] instead.
 ///
 /// Example:
 /// ```dart

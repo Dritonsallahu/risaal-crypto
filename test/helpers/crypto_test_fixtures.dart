@@ -1,24 +1,142 @@
+import 'package:risaal_crypto/src/crypto_protocol.dart';
+import 'package:risaal_crypto/src/key_bundle_replacement.dart'
+    show KeyBundleAcceptedReceipt, KeyBundleReplacementSnapshot;
 import 'package:risaal_crypto/src/key_helper.dart';
 import 'package:risaal_crypto/src/models/signal_keys.dart';
 import 'package:risaal_crypto/src/signal_protocol_manager.dart';
 import 'fake_secure_storage.dart';
 
+const testOpkRoute = OpkGenerationRouting(
+  bundleRevision: 1,
+  opkGeneration: 1,
+  opkSetDigest:
+      '0000000000000000000000000000000000000000000000000000000000000000',
+);
+
+final class AcceptedTestGeneration {
+  final KeyBundleReplacementSnapshot snapshot;
+  final KeyBundleAcceptedReceipt receipt;
+  final Map<String, dynamic> publicMaterial;
+
+  const AcceptedTestGeneration({
+    required this.snapshot,
+    required this.receipt,
+    required this.publicMaterial,
+  });
+
+  OpkGenerationRouting get route => OpkGenerationRouting(
+    bundleRevision: receipt.opkAcceptedBundleRevision,
+    opkGeneration: receipt.opkGeneration,
+    opkSetDigest: receipt.opkSetDigest,
+  );
+
+  PreKeyBundle consumerBundle({
+    String userId = 'bob-id',
+    String deviceId = 'bob-device',
+    int? oneTimePreKeyIndex = 0,
+  }) {
+    final publicOpks = (publicMaterial['oneTimePreKeys'] as List)
+        .map((value) => Map<String, dynamic>.from(value as Map))
+        .toList(growable: false);
+    final selected = oneTimePreKeyIndex == null
+        ? null
+        : <String, dynamic>{
+            ...publicOpks[oneTimePreKeyIndex],
+            ...route.toJson(),
+          };
+    return PreKeyBundle.fromServerJson(<String, dynamic>{
+      ...publicMaterial,
+      'userId': userId,
+      'deviceId': deviceId,
+      ...route.toJson(),
+      'oneTimePreKey': selected,
+    });
+  }
+}
+
 /// Shared test fixtures for crypto tests.
 class CryptoTestFixtures {
+  static KeyBundleAcceptedReceipt receiptFor(
+    KeyBundleReplacementSnapshot snapshot,
+  ) => KeyBundleAcceptedReceipt(
+    bundleRevision: snapshot.expectedBundleRevision + 1,
+    signedPreKeyId: snapshot.signedPreKeyId,
+    kemKeyId: snapshot.kemKeyId,
+    cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+    replacementId: snapshot.replacementId,
+    opkAcceptedBundleRevision: snapshot.expectedBundleRevision + 1,
+    opkGeneration: snapshot.opkGeneration,
+    opkSetDigest: snapshot.opkSetDigest,
+    opkSetCount: snapshot.opkSetCount,
+    opkHighWaterKeyId: snapshot.opkHighWaterKeyId,
+    bundlePublicMaterialDigest: snapshot.bundlePublicMaterialDigest,
+  );
+
+  static Future<AcceptedTestGeneration> acceptInitialGeneration(
+    SignalProtocolManager manager, {
+    int oneTimePreKeyCount = 5,
+  }) async {
+    final snapshot = await manager.prepareInitialKeyBundleRegistration(
+      oneTimePreKeyCount: oneTimePreKeyCount,
+    );
+    await manager.installKeyBundleReplacement(snapshot);
+    final dispatch = await manager.markKeyBundleReplacementDispatchStarted(
+      snapshot,
+    );
+    final receipt = receiptFor(snapshot);
+    await manager.acknowledgeKeyBundleReplacement(
+      snapshot: snapshot,
+      acceptance: receipt,
+    );
+    return AcceptedTestGeneration(
+      snapshot: snapshot,
+      receipt: receipt,
+      publicMaterial: dispatch.toInitialRegistrationKeyBundle(),
+    );
+  }
+
+  static Future<AcceptedTestGeneration> acceptReplacementGeneration(
+    SignalProtocolManager manager, {
+    required String deviceId,
+    int oneTimePreKeyCount = 100,
+  }) async {
+    final snapshot = await manager.prepareKeyBundleReplacement(
+      oneTimePreKeyCount: oneTimePreKeyCount,
+    );
+    await manager.installKeyBundleReplacement(snapshot);
+    final dispatch = await manager.markKeyBundleReplacementDispatchStarted(
+      snapshot,
+    );
+    final receipt = receiptFor(snapshot);
+    await manager.acknowledgeKeyBundleReplacement(
+      snapshot: snapshot,
+      acceptance: receipt,
+    );
+    return AcceptedTestGeneration(
+      snapshot: snapshot,
+      receipt: receipt,
+      publicMaterial: dispatch.toReplacementPayload(deviceId: deviceId),
+    );
+  }
+
   /// Generate a complete set of Signal Protocol keys for one user.
   /// Returns: (identityKP, signingKP, signedPreKey, oneTimePreKeys, kyberKP)
   static Future<
-      ({
-        KeyPair identityKP,
-        KeyPair signingKP,
-        SignedPreKey signedPreKey,
-        List<OneTimePreKey> oneTimePreKeys,
-        KyberKeyPair? kyberKP,
-      })> generateFullKeySet() async {
+    ({
+      KeyPair identityKP,
+      KeyPair signingKP,
+      SignedPreKey signedPreKey,
+      List<OneTimePreKey> oneTimePreKeys,
+      KyberKeyPair? kyberKP,
+    })
+  >
+  generateFullKeySet() async {
     final identityKP = await SignalKeyHelper.generateIdentityKeyPair();
     final signingKP = await SignalKeyHelper.generateSigningKeyPair();
-    final signedPreKey =
-        await SignalKeyHelper.generateSignedPreKey(0, signingKP);
+    final signedPreKey = await SignalKeyHelper.generateSignedPreKey(
+      1,
+      signingKP,
+    );
     final oneTimePreKeys = await SignalKeyHelper.generateOneTimePreKeys(0, 5);
 
     KyberKeyPair? kyberKP;
@@ -38,7 +156,7 @@ class CryptoTestFixtures {
   }
 
   /// Build a PreKeyBundle from a user's key set.
-  static PreKeyBundle buildBundle({
+  static Future<PreKeyBundle> buildBundle({
     required String userId,
     required String deviceId,
     required KeyPair identityKP,
@@ -46,8 +164,18 @@ class CryptoTestFixtures {
     required SignedPreKey signedPreKey,
     required List<OneTimePreKey> oneTimePreKeys,
     KyberKeyPair? kyberKP,
-  }) {
+  }) async {
+    final kyberSignature = kyberKP == null
+        ? null
+        : await SignalKeyHelper.sign(
+            signingKP.privateKey,
+            RisaalCryptoProtocol.kyberPreKeySignatureTranscript(
+              keyId: kyberKP.keyId!,
+              publicKey: kyberKP.publicKey,
+            ),
+          );
     return PreKeyBundle(
+      opkRoute: testOpkRoute,
       userId: userId,
       deviceId: deviceId,
       identityKey: identityKP.publicKey,
@@ -64,7 +192,15 @@ class CryptoTestFixtures {
             )
           : null,
       kyberPreKey: kyberKP != null
-          ? KyberPreKeyPublic(keyId: 0, publicKey: kyberKP.publicKey)
+          ? KyberPreKeyPublic(
+              keyId: kyberKP.keyId!,
+              publicKey: kyberKP.publicKey,
+              signature: kyberSignature!,
+              cryptoProtocolEpoch: RisaalCryptoProtocol.cryptoProtocolEpoch,
+              kemSuite: RisaalCryptoProtocol.kemSuite,
+              kemStandard: RisaalCryptoProtocol.kemStandard,
+              kemWireVersion: RisaalCryptoProtocol.kemWireVersion,
+            )
           : null,
     );
   }
@@ -72,9 +208,10 @@ class CryptoTestFixtures {
   /// Create a fully initialized SignalProtocolManager with in-memory storage.
   /// Calls initialize() to generate all keys.
   static Future<(SignalProtocolManager, FakeSecureStorage)>
-      createInitializedManager() async {
-    final storage = FakeSecureStorage();
+  createInitializedManager({FakeSecureStorage? storage}) async {
+    storage ??= FakeSecureStorage();
     final manager = SignalProtocolManager(secureStorage: storage);
+    await manager.wipeForFreshRegistration();
     await manager.initialize();
     return (manager, storage);
   }
@@ -82,50 +219,19 @@ class CryptoTestFixtures {
   /// Create two initialized managers (Alice and Bob) with established sessions.
   /// Returns both managers and their storages. Alice has a session to Bob.
   static Future<
-      ({
-        SignalProtocolManager alice,
-        FakeSecureStorage aliceStorage,
-        SignalProtocolManager bob,
-        FakeSecureStorage bobStorage,
-      })> createPairedManagers() async {
+    ({
+      SignalProtocolManager alice,
+      FakeSecureStorage aliceStorage,
+      SignalProtocolManager bob,
+      FakeSecureStorage bobStorage,
+    })
+  >
+  createPairedManagers() async {
     final (alice, aliceStorage) = await createInitializedManager();
     final (bob, bobStorage) = await createInitializedManager();
 
-    // Get Bob's key bundle
-    final bobBundle = await bob.generateKeyBundle();
-    final bobIdentityKey = bobBundle['identityKey'] as String;
-    final bobSigningKey = bobBundle['identitySigningKey'] as String;
-    final bobSignedPreKey = bobBundle['signedPreKey'] as Map<String, dynamic>;
-    final bobOneTimePreKeys = bobBundle['oneTimePreKeys'] as List<dynamic>;
-
-    // Build PreKeyBundle for Bob
-    final bundle = PreKeyBundle(
-      userId: 'bob-id',
-      deviceId: 'bob-device',
-      identityKey: bobIdentityKey,
-      identitySigningKey: bobSigningKey,
-      signedPreKey: SignedPreKeyPublic(
-        keyId: bobSignedPreKey['keyId'] as int,
-        publicKey: bobSignedPreKey['publicKey'] as String,
-        signature: bobSignedPreKey['signature'] as String,
-      ),
-      oneTimePreKey: bobOneTimePreKeys.isNotEmpty
-          ? OneTimePreKeyPublic(
-              keyId: (bobOneTimePreKeys.first as Map<String, dynamic>)['keyId']
-                  as int,
-              publicKey: (bobOneTimePreKeys.first
-                  as Map<String, dynamic>)['publicKey'] as String,
-            )
-          : null,
-      kyberPreKey: bobBundle.containsKey('kyberPreKey')
-          ? KyberPreKeyPublic(
-              keyId: (bobBundle['kyberPreKey'] as Map<String, dynamic>)['keyId']
-                  as int,
-              publicKey: (bobBundle['kyberPreKey']
-                  as Map<String, dynamic>)['publicKey'] as String,
-            )
-          : null,
-    );
+    final acceptedBob = await acceptInitialGeneration(bob);
+    final bundle = acceptedBob.consumerBundle();
 
     // Alice creates a session with Bob
     await alice.createSession(bundle);

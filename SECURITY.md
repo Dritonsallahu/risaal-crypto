@@ -27,7 +27,7 @@ We take all security reports seriously and will acknowledge receipt within 72 ho
 If a vulnerability is being **actively exploited**:
 
 1. **Email** security@risaal.org — include "P0 ACTIVE EXPLOIT" in subject
-2. **If no response within 2 hours:** escalate to hello@risaal.org
+2. **If you receive no acknowledgement within 72 hours:** escalate to hello@risaal.org
 3. **If vulnerability affects >1% of users:** trigger emergency patch release (bypass standard review, require single maintainer sign-off)
 4. **If key material is compromised server-side:** push remote key rotation to all clients immediately
 
@@ -35,11 +35,15 @@ If a vulnerability is being **actively exploited**:
 
 | Version | Supported          | Status |
 | ------- | ------------------ | ------ |
-| 0.3.x   | Yes                | Current |
-| 0.2.x   | Security fixes only| Previous |
-| < 0.2   | No                 | Pre-release |
+| 0.4.x   | Yes                | Current |
+| 0.3.x   | No — upgrade required (RISAAL-CRYPTO-2026-001) | End of Life |
+| < 0.3   | No                 | End of Life |
 
-Only the latest 0.3.x version receives full updates. 0.2.x receives critical security patches only. Please upgrade to the latest version before reporting issues.
+Only the latest 0.4.x version receives full updates. All prior versions are end-of-life and affected by RISAAL-CRYPTO-2026-001. Please upgrade before reporting issues.
+
+### Security Advisories
+
+Published advisories are in [`docs/security/advisories/`](docs/security/advisories/). See [RISAAL-CRYPTO-2026-001](docs/security/advisories/RISAAL-CRYPTO-2026-001.md) for the transactional-decrypt vulnerability fixed in 0.4.0.
 
 ## Threat Model
 
@@ -62,7 +66,7 @@ Only the latest 0.3.x version receives full updates. 0.2.x receives critical sec
 - **Quantum computer attacks on key exchange:** Kyber-768 (ML-KEM-768) hybrid key agreement provides post-quantum resistance
 
 **Device Forensics:**
-- **Memory forensics:** FFI-based secure memory zeroing (`SecureMemory.zeroBytes()`) clears sensitive data from RAM
+- **Memory forensics (partial):** Best-effort zeroing of key copies owned by this package (`SecureMemory.zeroBytes()`, Dart heap); the `cryptography`/`pqcrypto` libraries' internal copies are not overwritten and GC copies may persist (see `docs/MEMORY_SAFETY.md`)
 - **Key extraction:** Private keys stored in platform secure storage (Keychain/Keystore), never in plaintext files
 
 ### What We Do NOT Protect Against
@@ -85,16 +89,16 @@ Only the latest 0.3.x version receives full updates. 0.2.x receives critical sec
 **Cryptographic Limitations:**
 - **Group metadata:** Group membership is visible to server (though message content is still encrypted via Sender Keys)
 - **Contact discovery:** Phone number hashing for contact discovery is susceptible to rainbow table attacks
-- **Sealed Sender window:** 5-minute replay window exists for Sealed Sender envelopes
+- **Sealed Sender nonce set:** Nonce deduplication is the primary replay guard; the timestamp window is 30 days to cover realistic offline gaps. The persistent nonce set is trimmed to the newest 10,000 entries.
 
 ## Security Invariants
 
 These invariants MUST hold at all times. Violations are security bugs:
 
 1. **Private keys never leave secure storage:** All private keys stored via `CryptoSecureStorage`, never serialized to disk or logs
-2. **All DH intermediaries are zeroed:** Shared secrets from X25519 operations must be zeroed via `SecureMemory.zeroBytes()` after use
+2. **Package-owned DH/HKDF outputs are zeroed:** Every DH/HKDF output the package owns is copied once into a mutable buffer (`SecureMemory.ownedCopy()`) and zeroed via `SecureMemory.zeroBytes()` after use (verified by `test/secure_memory_zeroing_sites_test.dart`). Library-internal copies are out of reach and are not zeroed
 3. **No plaintext ever logged:** `CryptoDebugLogger` only logs key prefixes (first 8 chars) in debug builds, stripped from release
-4. **Sealed Sender replay protection:** Envelopes have 5-minute maximum replay window, enforced via timestamp validation
+4. **Sealed Sender replay protection:** Envelopes carry a persistent nonce set (trimmed to 10,000 entries) as the primary guard; the timestamp window is 30 days to cover realistic offline gaps
 5. **Skipped message key cap:** Maximum 2000 skipped message keys per session to prevent DoS memory exhaustion
 6. **Sender Key chain advance cap:** Maximum 2000 iterations when advancing chain to prevent DoS CPU exhaustion
 7. **Message number monotonicity:** Message numbers must strictly increase within a session (prevents replay and reordering)
@@ -106,13 +110,13 @@ These invariants MUST hold at all times. Violations are security bugs:
 |---------|---------|-----------|-------------|
 | `cryptography` | ^2.7.0 | X25519, Ed25519, AES-256-GCM, HKDF-SHA256, HMAC-SHA256 | Community-reviewed, widely used |
 | `crypto` | ^3.0.3 | SHA-256, SHA-512 | Maintained by Dart team |
-| `pqcrypto` | 0.1.0 | ML-KEM-768 (Kyber-768) via FFI | Research-grade, not production-audited |
+| `pqcrypto` | 0.4.0 | ML-KEM-768 (Kyber-768, FIPS 203) — pure Dart | Pure-Dart reference implementation; no native/FFI dependency |
 
 ### Dependency Security Notes
 
 - **cryptography:** Actively maintained, used in production by thousands of projects
 - **crypto:** Official Dart package, stable API since 2019
-- **pqcrypto:** Experimental FFI bindings to liboqs; USE AT YOUR OWN RISK for post-quantum features
+- **pqcrypto:** Pure-Dart FIPS 203 (ML-KEM-768) implementation; no native/FFI dependency. Not yet independently audited. The hybrid design ensures X25519 alone provides classical security if the ML-KEM component is broken.
 
 We pin exact versions in `pubspec.lock` and review all dependency updates for security implications.
 
@@ -135,13 +139,7 @@ We pin exact versions in `pubspec.lock` and review all dependency updates for se
 
 ### Post-Quantum Implementation Status
 
-The `pqcrypto` FFI bindings are **research-grade**, not production-audited. The Kyber-768 implementation:
-- Uses liboqs (Open Quantum Safe) via FFI
-- Has not been formally verified
-- May have side-channel vulnerabilities
-- Should be considered experimental
-
-We use Kyber as a **hybrid** with X25519, so even if Kyber is broken, X25519 still provides classical security.
+The `pqcrypto` 0.4.0 dependency is a **pure-Dart** FIPS 203 (ML-KEM-768) implementation with no native or FFI component. It has not undergone independent audit. We use ML-KEM as a **hybrid** with X25519, so even if ML-KEM is broken, X25519 still provides classical security.
 
 ### Dart VM Limitations
 
@@ -151,17 +149,7 @@ We use Kyber as a **hybrid** with X25519, so even if Kyber is broken, X25519 sti
 
 These are inherent Dart platform limitations. For maximum security, consider a native implementation.
 
-**Mitigations implemented:** FFI-based volatile memory zeroing (`SecureMemory`), native heap isolation (`SecureBuffer`), defensive byte copies to prevent library corruption, immediate zeroing after every DH operation. See `docs/MEMORY_SAFETY.md` for the complete memory safety model and residual risk analysis.
-
-### Steganography is NOT Security
-
-The `StegoService` LSB steganography feature provides **obscurity, not security:**
-- It hides encrypted data inside images, making it less obvious
-- The underlying security still comes from AES-256-GCM encryption
-- Steganography can be defeated by simple statistical analysis
-- DO NOT rely on steganography as your primary security mechanism
-
-Steganography is an additional layer on top of proper encryption, not a replacement.
+**Mitigations implemented:** best-effort Dart-heap zeroing of the DH/HKDF/chain-key copies this package owns (`SecureMemory.zeroBytes()`, no `volatile` guarantee), native-heap isolation with `volatile` zeroing on dispose for host-chosen long-lived keys (`SecureBuffer`), defensive copies so zeroing never corrupts a key still in use. **Not wiped:** the `cryptography`/`pqcrypto` libraries' internal key copies (e.g. `SensitiveBytes` in `cryptography` 2.9.0), GC compaction copies, and base64 `String` private keys. See `docs/MEMORY_SAFETY.md` for the complete memory safety model and residual risk analysis.
 
 ## Security Best Practices for Users
 
@@ -194,7 +182,7 @@ Security-relevant changes are documented in `CHANGELOG.md` with a `[SECURITY]` p
 - **[docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md)** — Protocol versioning and compatibility rules
 - **[docs/METADATA_PRIVACY_MODEL.md](docs/METADATA_PRIVACY_MODEL.md)** — Explicit metadata guarantees, leakage model, and roadmap
 - **[docs/ASSURANCE_SCORECARD.md](docs/ASSURANCE_SCORECARD.md)** — Objective scoring matrix and benchmark tracking
-- **[docs/BUG_BOUNTY.md](docs/BUG_BOUNTY.md)** — Responsible disclosure rewards policy
+- **[docs/BUG_BOUNTY.md](docs/BUG_BOUNTY.md)** — Vulnerability disclosure policy (no paid bounty during pre-release)
 - **[docs/TRANSPARENCY_REPORT_TEMPLATE.md](docs/TRANSPARENCY_REPORT_TEMPLATE.md)** — Quarterly transparency report template
 
 ### Operational Security
